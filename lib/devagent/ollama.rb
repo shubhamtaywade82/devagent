@@ -6,7 +6,7 @@ require "net/http"
 module Devagent
   # Ollama wraps local HTTP calls to the Ollama inference server.
   class Ollama
-    ENDPOINT = URI("http://localhost:11434/api/generate")
+    ENDPOINT = URI("http://172.29.128.1:11434/api/generate")
 
     def self.query(prompt, model:)
       response = perform_request(prompt, model)
