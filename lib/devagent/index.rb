@@ -33,6 +33,10 @@ module Devagent
       end.compact
     end
 
+    def document_count
+      @docs.size
+    end
+
     def retrieve(query, k: 12)
       query_tokens = tokenize(query)
 
