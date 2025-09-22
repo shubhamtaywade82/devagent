@@ -36,7 +36,7 @@ module Devagent
     private_class_method :plugin_paths
 
     def self.matching_plugins(repo_path)
-      ObjectSpace.each_object(Module).each_with_object([]) do |mod, matches|
+      ObjectSpace.each_object(Module).with_object([]) do |mod, matches|
         next unless plugin_candidate?(mod)
         next unless mod.applies?(repo_path)
 

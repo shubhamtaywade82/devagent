@@ -4,6 +4,8 @@ require "stringio"
 
 # rubocop:disable Metrics/BlockLength
 RSpec.describe Devagent::Diagnostics do
+  subject(:diagnostics) { described_class.new(context, output: output) }
+
   let(:output) { StringIO.new }
   let(:index) do
     instance_double(Devagent::Index, build!: nil, retrieve: [], document_count: 2)
@@ -26,14 +28,12 @@ RSpec.describe Devagent::Diagnostics do
     )
   end
 
-  subject(:diagnostics) { described_class.new(context, output: output) }
-
   before do
     allow(llm).to receive(:call).and_return("READY")
   end
 
   it "returns true when all checks pass" do
-    expect(diagnostics.run).to eq(true)
+    expect(diagnostics.run).to be(true)
 
     output.rewind
     expect(output.string).to include("All checks passed.")
@@ -42,7 +42,7 @@ RSpec.describe Devagent::Diagnostics do
   it "returns false when a check fails" do
     allow(llm).to receive(:call).and_raise(StandardError, "connection refused")
 
-    expect(diagnostics.run).to eq(false)
+    expect(diagnostics.run).to be(false)
 
     output.rewind
     expect(output.string).to include("FAIL").and include("connection refused")
@@ -51,7 +51,7 @@ RSpec.describe Devagent::Diagnostics do
   it "reports missing model configuration" do
     allow(context).to receive(:config).and_return({})
 
-    expect(diagnostics.run).to eq(false)
+    expect(diagnostics.run).to be(false)
 
     output.rewind
     expect(output.string).to include("LLM model not configured")
