@@ -3,6 +3,7 @@
 require "json"
 
 module Devagent
+  # Memory persists lightweight key/value data alongside the repository.
   class Memory
     def initialize(repo_path)
       @path = File.join(repo_path, ".devagent.memory.json")

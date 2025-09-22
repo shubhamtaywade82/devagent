@@ -1,13 +1,34 @@
 # frozen_string_literal: true
+
 module Devagent
+  # Plugin defines the optional API surface for auto-loaded extensions.
   module Plugin
-    def self.applies?(_repo_path); false end
-    def self.priority; 0 end
-    def self.on_load(_ctx); end
-    def self.on_index(_ctx); end
-    def self.on_prompt(_ctx, _task); "" end
-    def self.on_action(_ctx, _name, _args = {}); nil end
-    def self.on_post_edit(_ctx, _log); end
-    def self.commands; {} end
+    class << self
+      def applies?(_repo_path)
+        false
+      end
+
+      def priority
+        0
+      end
+
+      def on_load(_ctx); end
+
+      def on_index(_ctx); end
+
+      def on_prompt(_ctx, _task)
+        ""
+      end
+
+      def on_action(_ctx, _name, _args = {})
+        nil
+      end
+
+      def on_post_edit(_ctx, _log); end
+
+      def commands
+        {}
+      end
+    end
   end
 end

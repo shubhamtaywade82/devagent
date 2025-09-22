@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 module Devagent
+  # Safety guards agent actions against disallowed file targets.
   class Safety
     def initialize(ctx)
       @repo = ctx.repo_path

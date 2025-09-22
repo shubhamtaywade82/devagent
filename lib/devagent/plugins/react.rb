@@ -5,6 +5,7 @@ require_relative "../plugin"
 
 module Devagent
   module Plugins
+    # React plugin configures prompt guidance and test execution for React apps.
     module React
       extend Devagent::Plugin
 
@@ -12,7 +13,11 @@ module Devagent
         pkg = File.join(repo, "package.json")
         return false unless File.exist?(pkg)
 
-        json = JSON.parse(File.read(pkg)) rescue {}
+        json = begin
+          JSON.parse(File.read(pkg))
+        rescue StandardError
+          {}
+        end
         deps = (json["dependencies"] || {}).merge(json["devDependencies"] || {})
         deps.key?("react")
       end

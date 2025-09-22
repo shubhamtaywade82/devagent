@@ -6,14 +6,25 @@ require_relative "safety"
 require_relative "util"
 
 module Devagent
+  # Executor applies planned actions, runs commands, and manages rollback/snapshots.
+  # rubocop:disable Metrics/ClassLength
   class Executor
     attr_reader :log
+
+    ACTION_HANDLERS = {
+      "create_file" => :handle_create_file,
+      "edit_file" => :handle_edit_file,
+      "apply_patch" => :handle_apply_patch,
+      "run_command" => :handle_run_command,
+      "generate_tests" => :handle_generate_tests,
+      "migrate" => :handle_migrate
+    }.freeze
 
     def initialize(ctx)
       @ctx = ctx
       @repo = ctx.repo_path
       @safety = Safety.new(ctx)
-      @dry_run = !!ctx.config.dig("auto", "dry_run")
+      @dry_run = ctx.config.dig("auto", "dry_run") ? true : false
       @log = []
       @snapshot_ref = nil
     end
@@ -54,22 +65,11 @@ module Devagent
     end
 
     def apply_action(action)
-      case action.fetch("type")
-      when "create_file"
-        create_file(action["path"], action["content"] || "")
-      when "edit_file"
-        edit_file(action["path"], action["content"], action["whole_file"])
-      when "apply_patch"
-        apply_patch(action["patch"])
-      when "run_command"
-        run_command(action["command"])
-      when "generate_tests"
-        generate_tests(action["path"])
-      when "migrate"
-        run_command("bundle exec rails db:migrate")
-      else
-        @log << "Unknown action: #{action.inspect}"
-      end
+      type = action.fetch("type")
+      handler = ACTION_HANDLERS[type]
+      return @log << "Unknown action: #{action.inspect}" unless handler
+
+      public_send(handler, action)
     end
 
     def create_file(relative_path, content)
@@ -82,7 +82,7 @@ module Devagent
       File.write(absolute, content)
     end
 
-    def edit_file(relative_path, content, whole_file)
+    def edit_file(relative_path, content, _whole_file)
       guard_path!(relative_path)
       raise "content required for edit" if content.nil?
 
@@ -119,32 +119,68 @@ module Devagent
     end
 
     def generate_tests(path)
-      if path && !path.empty? && File.exist?(File.join(@repo, path))
-        source_path = File.join(@repo, path)
-        content = File.read(source_path)
-        spec_prompt = "Write comprehensive RSpec for this file:\n\n#{content}"
-        spec = @ctx.llm.call(spec_prompt)
-        spec_path = guess_spec_path(path)
-        @log << "generate_tests -> #{spec_path}"
-        return if @dry_run
-
-        absolute_spec = File.join(@repo, spec_path)
-        FileUtils.mkdir_p(File.dirname(absolute_spec))
-        File.write(absolute_spec, spec)
+      if should_generate_spec?(path)
+        create_spec_from_source(path)
       else
-        @log << "generate_tests -> rspec --init"
-        run_command("bundle exec rspec --init")
+        initialize_rspec_suite
       end
     end
 
     def guess_spec_path(source)
       return File.join("spec", "generated_spec.rb") unless source&.end_with?(".rb")
 
-      relative = source.sub(/^app\//, "")
+      relative = source.sub(%r{^app/}, "")
       File.join("spec", relative.sub(/\.rb$/, "_spec.rb"))
     end
 
     private
+
+    def handle_create_file(action)
+      create_file(action["path"], action["content"] || "")
+    end
+
+    def handle_edit_file(action)
+      edit_file(action["path"], action["content"], action["whole_file"])
+    end
+
+    def handle_apply_patch(action)
+      apply_patch(action["patch"])
+    end
+
+    def handle_run_command(action)
+      run_command(action["command"])
+    end
+
+    def handle_generate_tests(action)
+      generate_tests(action["path"])
+    end
+
+    def handle_migrate(_action)
+      run_command("bundle exec rails db:migrate")
+    end
+
+    def should_generate_spec?(path)
+      path && !path.empty? && File.exist?(File.join(@repo, path))
+    end
+
+    def create_spec_from_source(path)
+      source_path = File.join(@repo, path)
+      content = File.read(source_path)
+      spec_prompt = "Write comprehensive RSpec for this file:\n\n#{content}"
+      spec = @ctx.llm.call(spec_prompt)
+      spec_path = guess_spec_path(path)
+      @log << "generate_tests -> #{spec_path}"
+      return if @dry_run
+
+      absolute_spec = File.join(@repo, spec_path)
+      FileUtils.mkdir_p(File.dirname(absolute_spec))
+      File.write(absolute_spec, spec)
+    end
+
+    def initialize_rspec_suite
+      @log << "generate_tests -> rspec --init"
+      run_command("bundle exec rspec --init")
+    end
 
     def guard_path!(relative_path)
       raise "path required" if relative_path.to_s.empty?
@@ -155,4 +191,5 @@ module Devagent
       system(*cmd)
     end
   end
+  # rubocop:enable Metrics/ClassLength
 end

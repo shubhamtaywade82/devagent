@@ -6,15 +6,19 @@ require "json-schema"
 module Devagent
   Plan = Struct.new(:actions, :confidence)
 
+  # Planner asks the LLM for an actionable plan and validates the response.
   class Planner
     ACTION_SCHEMA = {
-      "type" => { "type" => "string", "enum" => %w[edit_file create_file apply_patch run_command generate_tests migrate] },
-      "path" => { "type" => ["string", "null"] },
-      "whole_file" => { "type" => ["boolean", "null"] },
-      "content" => { "type" => ["string", "null"] },
-      "patch" => { "type" => ["string", "null"] },
-      "command" => { "type" => ["string", "null"] },
-      "notes" => { "type" => ["string", "null"] }
+      "type" => {
+        "type" => "string",
+        "enum" => %w[edit_file create_file apply_patch run_command generate_tests migrate]
+      },
+      "path" => { "type" => %w[string null] },
+      "whole_file" => { "type" => %w[boolean null] },
+      "content" => { "type" => %w[string null] },
+      "patch" => { "type" => %w[string null] },
+      "command" => { "type" => %w[string null] },
+      "notes" => { "type" => %w[string null] }
     }.freeze
 
     PLAN_SCHEMA = {
@@ -26,7 +30,7 @@ module Devagent
       }
     }.freeze
 
-    SYSTEM = <<~SYS.freeze
+    SYSTEM = <<~SYS
       You are a senior software engineer. Return ONLY valid JSON.
       JSON:
       {
@@ -50,29 +54,8 @@ module Devagent
     DEFAULT_PLAN = Plan.new([], 0.0).freeze
 
     def self.plan(ctx:, task:)
-      context_snippets = safe_retrieve(ctx, task)
-      preface = Array(ctx.plugins).map do |plugin|
-        next unless plugin.respond_to?(:on_prompt)
-
-        plugin.on_prompt(ctx, task)
-      end.compact.join("\n")
-
-      prompt = <<~PROMPT
-        #{preface}
-        #{SYSTEM}
-
-        Repository context (truncated):
-        #{context_snippets}
-
-        Task from user:
-        #{task}
-
-        Return JSON only.
-      PROMPT
-
-      raw = invoke_llm(ctx, prompt)
-      json = parse_plan(raw)
-
+      prompt = build_prompt(ctx, task)
+      json = parse_plan(invoke_llm(ctx, prompt))
       actions = json.fetch("actions", [])
       confidence = json.fetch("confidence", 0.0).to_f
       Plan.new(actions, confidence)
@@ -81,7 +64,7 @@ module Devagent
     def self.safe_retrieve(ctx, task)
       return "" unless ctx.respond_to?(:index) && ctx.index.respond_to?(:retrieve)
 
-      Array(ctx.index.retrieve(task, k: 12)).join("\n\n")
+      Array(ctx.index.retrieve(task, limit: 12)).join("\n\n")
     rescue StandardError
       ""
     end
@@ -107,5 +90,30 @@ module Devagent
       { "actions" => [], "confidence" => 0.0 }
     end
     private_class_method :parse_plan
+
+    def self.build_prompt(ctx, task)
+      <<~PROMPT
+        #{preface_text(ctx, task)}
+        #{SYSTEM}
+
+        Repository context (truncated):
+        #{safe_retrieve(ctx, task)}
+
+        Task from user:
+        #{task}
+
+        Return JSON only.
+      PROMPT
+    end
+    private_class_method :build_prompt
+
+    def self.preface_text(ctx, task)
+      Array(ctx.plugins).filter_map do |plugin|
+        next unless plugin.respond_to?(:on_prompt)
+
+        plugin.on_prompt(ctx, task)
+      end.join("\n")
+    end
+    private_class_method :preface_text
   end
 end

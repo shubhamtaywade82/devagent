@@ -3,6 +3,7 @@
 require "zeitwerk"
 require_relative "devagent/version"
 
+# Devagent is the primary namespace for the autonomous local agent gem.
 module Devagent
   class Error < StandardError; end
 

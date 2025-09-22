@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+# rubocop:disable Metrics/BlockLength
 RSpec.describe Devagent::CLI do
   it "builds a context and starts the REPL" do
     ctx = instance_double(Devagent::PluginContext)
@@ -41,3 +42,4 @@ RSpec.describe Devagent::CLI do
     end
   end
 end
+# rubocop:enable Metrics/BlockLength

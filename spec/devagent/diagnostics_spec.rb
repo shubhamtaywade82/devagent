@@ -2,6 +2,7 @@
 
 require "stringio"
 
+# rubocop:disable Metrics/BlockLength
 RSpec.describe Devagent::Diagnostics do
   let(:output) { StringIO.new }
   let(:index) do
@@ -56,3 +57,4 @@ RSpec.describe Devagent::Diagnostics do
     expect(output.string).to include("LLM model not configured")
   end
 end
+# rubocop:enable Metrics/BlockLength

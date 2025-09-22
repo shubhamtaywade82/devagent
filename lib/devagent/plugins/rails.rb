@@ -4,6 +4,7 @@ require_relative "../plugin"
 
 module Devagent
   module Plugins
+    # Rails plugin tunes prompts and helpers for Rails applications.
     module Rails
       extend Devagent::Plugin
 

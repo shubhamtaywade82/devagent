@@ -9,7 +9,10 @@ Gem::Specification.new do |spec|
   spec.email = ["shubhamtaywade82@gmail.com"]
 
   spec.summary               = "Autonomous local AI coding agent (Ollama) for repo-aware planning, edits, and tests."
-  spec.description           = "devagent is a CLI that acts like a senior developer: it plans tasks, edits/creates files, generates/updates RSpec, runs tests, and iterates—fully locally via Ollama. Framework-aware via a plugin system (Rails, React, Ruby gems)."
+  spec.description           = <<~DESC.strip
+    devagent is a CLI that acts like a senior developer: it plans tasks, edits/creates files, generates/updates RSpec, runs
+    tests, and iterates—fully locally via Ollama. Framework-aware via a plugin system (Rails, React, Ruby gems).
+  DESC
   spec.homepage              = "https://github.com/shubhamtaywade/devagent"
   spec.license               = "MIT"
   spec.required_ruby_version = ">= 3.2.0"
@@ -37,13 +40,13 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
 
   # === Runtime dependencies (keep light) ===
-  spec.add_dependency "thor", "~> 1.3"
   spec.add_dependency "diffy", "~> 3.4"
-  spec.add_dependency "parallel", "~> 1.24"
   spec.add_dependency "json-schema", "~> 4.3"
-  spec.add_dependency "zeitwerk", "~> 2.6"
+  spec.add_dependency "parallel", "~> 1.24"
+  spec.add_dependency "thor", "~> 1.3"
   spec.add_dependency "tty-reader", "~> 0.9"
   spec.add_dependency "tty-spinner", "~> 0.9"
+  spec.add_dependency "zeitwerk", "~> 2.6"
 
   # === Development/test dependencies ===
   spec.add_development_dependency "rake", "~> 13.2"

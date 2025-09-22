@@ -10,6 +10,7 @@ require_relative "util"
 module Devagent
   PluginContext = Struct.new(:repo_path, :config, :llm, :shell, :index, :memory, :plugins)
 
+  # Context builds the dependencies (LLM, shell, index, plugins) for the agent.
   module Context
     DEFAULTS = {
       "model" => "codellama",
@@ -25,14 +26,9 @@ module Devagent
     }.freeze
 
     def self.build(repo_path)
-      cfg_path = File.join(repo_path, ".devagent.yml")
-      config = DEFAULTS.merge(File.exist?(cfg_path) ? YAML.load_file(cfg_path) : {})
-      llm = lambda do |prompt, **opts|
-        Ollama.query(prompt, model: config["model"], **opts)
-      end
-      shell = lambda do |cmd, chdir: repo_path|
-        Util.run!(cmd, chdir: chdir)
-      end
+      config = config_for(repo_path)
+      llm = build_llm(config)
+      shell = build_shell(repo_path)
       index = Index.new(repo_path, config["index"])
       memory = Memory.new(repo_path)
       plugins = PluginLoader.load_plugins(
@@ -40,5 +36,25 @@ module Devagent
       )
       PluginContext.new(repo_path, config, llm, shell, index, memory, plugins)
     end
+
+    def self.config_for(repo_path)
+      cfg_path = File.join(repo_path, ".devagent.yml")
+      DEFAULTS.merge(File.exist?(cfg_path) ? YAML.load_file(cfg_path) : {})
+    end
+    private_class_method :config_for
+
+    def self.build_llm(config)
+      lambda do |prompt, **opts|
+        Ollama.query(prompt, model: config["model"], **opts)
+      end
+    end
+    private_class_method :build_llm
+
+    def self.build_shell(repo_path)
+      lambda do |cmd, chdir: repo_path|
+        Util.run!(cmd, chdir: chdir)
+      end
+    end
+    private_class_method :build_shell
   end
 end

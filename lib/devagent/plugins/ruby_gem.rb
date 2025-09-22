@@ -4,6 +4,7 @@ require_relative "../plugin"
 
 module Devagent
   module Plugins
+    # RubyGem plugin adds conventions for Ruby library projects.
     module RubyGem
       extend Devagent::Plugin
 

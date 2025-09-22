@@ -3,6 +3,7 @@
 require "open3"
 
 module Devagent
+  # Util contains shared helper routines for shelling out and file checks.
   module Util
     module_function
 

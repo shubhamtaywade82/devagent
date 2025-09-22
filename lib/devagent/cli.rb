@@ -6,6 +6,7 @@ require_relative "auto"
 require_relative "diagnostics"
 
 module Devagent
+  # CLI exposes Thor commands for launching the agent and running diagnostics.
   class CLI < Thor
     def self.exit_on_failure?
       true

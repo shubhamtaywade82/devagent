@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 module Devagent
+  # Diagnostics performs lightweight checks to validate configuration and dependencies.
   class Diagnostics
     def initialize(context, output: $stdout)
       @context = context
@@ -38,19 +39,14 @@ module Devagent
     end
 
     def check_configuration
-      config = context.config || {}
-      model = config["model"].to_s
-      raise "LLM model not configured. Set `model` in .devagent.yml." if model.empty?
-
-      plugins = Array(context.plugins).map { |plugin| plugin.name.to_s.split("::").last }.reject(&:empty?)
-      plugin_summary = plugins.empty? ? "no plugins detected" : "plugins: #{plugins.join(', ')}"
+      model = configured_model
       "model: #{model}, #{plugin_summary}"
     end
 
     def check_index
       index = context.index
       index.build!
-      index.retrieve("diagnostic", k: 1) # ensure retrieval executes without error
+      index.retrieve("diagnostic", limit: 1) # ensure retrieval executes without error
       "indexed files: #{index.document_count}"
     end
 
@@ -60,6 +56,18 @@ module Devagent
       raise "Unexpected response from Ollama: #{response.inspect}" unless text.downcase.include?("ready")
 
       "response: #{text}"
+    end
+
+    def configured_model
+      model = (context.config || {})["model"].to_s
+      raise "LLM model not configured. Set `model` in .devagent.yml." if model.empty?
+
+      model
+    end
+
+    def plugin_summary
+      names = Array(context.plugins).map { |plugin| plugin.name.to_s.split("::").last }.reject(&:empty?)
+      names.empty? ? "no plugins detected" : "plugins: #{names.join(", ")}"
     end
   end
 end
