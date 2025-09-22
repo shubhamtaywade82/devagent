@@ -9,7 +9,7 @@ module Devagent
     desc "start", "Start autonomous REPL (default)"
     def start
       ctx = Context.build(Dir.pwd)
-      Auto.new(ctx).repl
+      Auto.new(ctx, input: $stdin, output: $stdout).repl
     end
 
     default_task :start
