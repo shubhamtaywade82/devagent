@@ -1,16 +1,15 @@
-model: "codellama"
+model: "gpt-4o-mini"
 auto:
   max_iterations: 3
   dry_run: false
   require_tests_green: true
   confirmation_threshold: 0.7
   allowlist:
-    - "app/**"
     - "lib/**"
     - "spec/**"
-    - "config/**"
-    - "db/**"
-    - "src/**"
+    - "sig/**"
+    - "bin/**"
+    - "exe/**"
   denylist:
     - ".git/**"
     - "node_modules/**"
@@ -21,4 +20,4 @@ auto:
 index:
   threads: 8
   globs:
-    - "**/*.{rb,erb,haml,slim,js,jsx,ts,tsx,rb,ru}"
+    - "**/*.{rb,rbs,ru,erb,haml,slim,js,jsx,ts,tsx}"
