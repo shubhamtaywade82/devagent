@@ -7,6 +7,12 @@ module Devagent
   module Util
     module_function
 
+    def self.run!(cmd, chdir: Dir.pwd)
+      result = `cd #{chdir} && #{cmd}`
+      raise "Command failed (#{cmd}): #{result}" unless $?.success?
+      result
+    end
+
     def run!(cmd, chdir:)
       stdout, stderr, status = Open3.capture3(cmd, chdir: chdir)
       raise "Command failed (#{cmd}): #{stderr}" unless status.success?
