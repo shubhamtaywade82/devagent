@@ -41,6 +41,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency "diffy", "~> 3.4"
   spec.add_dependency "parallel", "~> 1.24"
   spec.add_dependency "json-schema", "~> 4.3"
+  spec.add_dependency "zeitwerk", "~> 2.6"
   spec.add_dependency "tty-reader", "~> 0.9"
   spec.add_dependency "tty-spinner", "~> 0.9"
 
