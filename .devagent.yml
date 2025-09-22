@@ -1,4 +1,4 @@
-model: "gpt-4o-mini"
+model: "qwen2.5-coder:14b"
 auto:
   max_iterations: 3
   dry_run: false
