@@ -4,24 +4,19 @@ require "json"
 require "net/http"
 
 module Devagent
-  # Ollama wraps local HTTP calls to the Ollama inference server.
+  # Minimal Ollama wrapper
   class Ollama
-    ENDPOINT = URI("http://172.29.128.1:11434/api/generate")
+    ENDPOINT = URI("#{ENV.fetch('OLLAMA_HOST', 'http://172.29.128.1:11434')}/api/generate")
 
     def self.query(prompt, model:)
-      puts "[Ollama] Prompt: #{prompt[0..200]}..." # truncate for safety
       response = perform_request(prompt, model)
-      pp response
       ensure_success!(response)
-      parsed = parse_response(response.body)
-      puts "[Ollama] Response: #{parsed[0..200]}..." # truncate
-      parsed
+      parse_response(response.body)
     end
 
     def self.perform_request(prompt, model)
       request = Net::HTTP::Post.new(ENDPOINT, "Content-Type" => "application/json")
       request.body = { model: model, prompt: prompt, stream: false }.to_json
-
       Net::HTTP.start(ENDPOINT.hostname, ENDPOINT.port) do |http|
         http.read_timeout = 120
         http.request(request)
@@ -31,8 +26,12 @@ module Devagent
 
     def self.ensure_success!(response)
       return if response.is_a?(Net::HTTPSuccess)
-
-      raise "Ollama request failed (#{response.code}): #{response.body}"
+      body = response.body.to_s
+      code = response.code.to_i
+      if code == 404 && body.include?("model")
+        raise "Ollama: the configured model was not found. Run `ollama list` and `ollama pull <model[:tag]>`, then set `model:` in .devagent.yml."
+      end
+      raise "Ollama request failed (#{response.code}): #{body}"
     end
     private_class_method :ensure_success!
 

@@ -1,40 +1,21 @@
 # frozen_string_literal: true
 
 require "yaml"
-require_relative "plugin_loader"
-require_relative "index"
-require_relative "memory"
 require_relative "ollama"
-require_relative "util"
 
 module Devagent
-  PluginContext = Struct.new(:repo_path, :config, :llm, :shell, :index, :memory, :plugins)
+  PluginContext = Struct.new(:repo_path, :config, :llm)
 
-  # Context builds the dependencies (LLM, shell, index, plugins) for the agent.
+  # Minimal context: just config + LLM callable.
   module Context
     DEFAULTS = {
-      "model" => "codellama",
-      "auto" => {
-        "max_iterations" => 3,
-        "dry_run" => false,
-        "require_tests_green" => true,
-        "confirmation_threshold" => 0.7,
-        "allowlist" => ["app/**", "lib/**", "spec/**", "config/**", "db/**", "src/**"],
-        "denylist" => ["node_modules/**", "log/**", "tmp/**", ".git/**", "dist/**", "build/**"]
-      },
-      "index" => { "threads" => 8, "globs" => ["**/*.{rb,erb,haml,slim,js,jsx,ts,tsx,rb,ru}"] }
+      "model" => "llama3.1:8b"
     }.freeze
 
     def self.build(repo_path)
       config = config_for(repo_path)
       llm = build_llm(config)
-      shell = build_shell(repo_path)
-      index = Index.new(repo_path, config["index"])
-      memory = Memory.new(repo_path)
-      plugins = PluginLoader.load_plugins(
-        PluginContext.new(repo_path, config, llm, shell, index, memory, [])
-      )
-      PluginContext.new(repo_path, config, llm, shell, index, memory, plugins)
+      PluginContext.new(repo_path, config, llm)
     end
 
     def self.config_for(repo_path)
@@ -45,16 +26,9 @@ module Devagent
 
     def self.build_llm(config)
       lambda do |prompt, **opts|
-        Ollama.query(prompt, model: config["model"], **opts)
+        Ollama.query(prompt, model: config.fetch("model"), **opts)
       end
     end
     private_class_method :build_llm
-
-    def self.build_shell(repo_path)
-      lambda do |cmd, chdir: repo_path|
-        Util.run!(cmd, chdir: chdir)
-      end
-    end
-    private_class_method :build_shell
   end
 end

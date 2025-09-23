@@ -1,4 +1,4 @@
-model: "llama3.1:8b"
+model: qwen2.5-coder:7b
 auto:
   max_iterations: 3
   dry_run: false

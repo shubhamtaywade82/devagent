@@ -1,0 +1,462 @@
+diff --git a/lib/devagent/cli.rb b/lib/devagent/cli.rb
+index 0a1b3d4..1111111 100644
+--- a/lib/devagent/cli.rb
++++ b/lib/devagent/cli.rb
+@@ -1,41 +1,34 @@
+ # frozen_string_literal: true
+
+-require "thor"
+-require_relative "context"
+-require_relative "auto"
+-require_relative "diagnostics"
++require "thor"
++require_relative "context"
++require_relative "auto"
+
+ module Devagent
+-  # CLI exposes Thor commands for launching the agent and running diagnostics.
++  # CLI exposes Thor commands for launching the minimal Q&A REPL.
+   class CLI < Thor
+     def self.exit_on_failure?
+       true
+     end
+
+-    desc "start", "Start autonomous REPL (default)"
++    desc "start", "Start Q&A REPL (default)"
+     def start
+-      ctx = Context.build(Dir.pwd)
++      ctx = Context.build(Dir.pwd)
+       Auto.new(ctx, input: $stdin, output: $stdout).repl
+     end
+
+-    desc "test", "Run diagnostics to verify configuration and Ollama connectivity"
+-    def test
+-      ctx = Context.build(Dir.pwd)
+-      diagnostics = Diagnostics.new(ctx, output: $stdout)
+-      success = diagnostics.run
+-      raise Thor::Error, "Diagnostics failed" unless success
+-
+-      success
+-    end
+-
+     default_task :start
+   end
+ end
+diff --git a/lib/devagent/context.rb b/lib/devagent/context.rb
+index 2222222..3333333 100644
+--- a/lib/devagent/context.rb
++++ b/lib/devagent/context.rb
+@@ -1,92 +1,54 @@
+ # frozen_string_literal: true
+
+-require "yaml"
+-require_relative "plugin_loader"
+-require_relative "index"
+-require_relative "memory"
+-require_relative "ollama"
+-require_relative "util"
++require "yaml"
++require_relative "ollama"
+
+ module Devagent
+-  PluginContext = Struct.new(:repo_path, :config, :llm, :shell, :index, :memory, :plugins)
++  PluginContext = Struct.new(:repo_path, :config, :llm)
+
+-  # Context builds the dependencies (LLM, shell, index, plugins) for the agent.
++  # Context builds just enough to talk to the LLM.
+   module Context
+     DEFAULTS = {
+-      "model" => "codellama",
+-      "auto" => {
+-        "max_iterations" => 3,
+-        "dry_run" => false,
+-        "require_tests_green" => true,
+-        "confirmation_threshold" => 0.7,
+-        "allowlist" => ["app/**", "lib/**", "spec/**", "config/**", "db/**", "src/**"],
+-        "denylist" => ["node_modules/**", "log/**", "tmp/**", ".git/**", "dist/**", "build/**"]
+-      },
+-      "index" => { "threads" => 8, "globs" => ["**/*.{rb,erb,haml,slim,js,jsx,ts,tsx,rb,ru}"] }
++      "model" => "llama3.1:8b"
+     }.freeze
+
+     def self.build(repo_path)
+       config = config_for(repo_path)
+-      llm = build_llm(config)
+-      shell = build_shell(repo_path)
+-      index = Index.new(repo_path, config["index"])
+-      memory = Memory.new(repo_path)
+-      plugins = PluginLoader.load_plugins(
+-        PluginContext.new(repo_path, config, llm, shell, index, memory, [])
+-      )
+-      PluginContext.new(repo_path, config, llm, shell, index, memory, plugins)
++      llm = build_llm(config)
++      PluginContext.new(repo_path, config, llm)
+     end
+
+     def self.config_for(repo_path)
+       cfg_path = File.join(repo_path, ".devagent.yml")
+       DEFAULTS.merge(File.exist?(cfg_path) ? YAML.load_file(cfg_path) : {})
+     end
+     private_class_method :config_for
+
+     def self.build_llm(config)
+       lambda do |prompt, **opts|
+-        Ollama.query(prompt, model: config["model"], **opts)
++        Ollama.query(prompt, model: config.fetch("model"))
+       end
+     end
+     private_class_method :build_llm
+-
+-    def self.build_shell(repo_path)
+-      lambda do |cmd, chdir: repo_path|
+-        Util.run!(cmd, chdir: chdir)
+-      end
+-    end
+-    private_class_method :build_shell
+   end
+ end
+diff --git a/lib/devagent/auto.rb b/lib/devagent/auto.rb
+index 4444444..5555555 100644
+--- a/lib/devagent/auto.rb
++++ b/lib/devagent/auto.rb
+@@ -1,154 +1,67 @@
+ # frozen_string_literal: true
+
+-require "tty-reader"
+-require_relative "planner"
+-require_relative "executor"
++require "tty-reader"
+
+ module Devagent
+-  # Auto exposes the interactive REPL that drives autonomous workflows.
++  # Auto exposes a minimal Q&A REPL: ask anything, prints LLM response.
+   class Auto
+     PROMPT = "devagent> "
+     EXIT_COMMANDS = %w[exit quit].freeze
+
+     def initialize(context, input: $stdin, output: $stdout)
+       @context = context
+       @input = input
+       @output = output
+-      @executor = Executor.new(context)
+-      @max_iter = context.config.dig("auto", "max_iterations") || 3
+-      @require_green = context.config.dig("auto", "require_tests_green") != false
+-      @threshold = context.config.dig("auto", "confirmation_threshold") || 0.7
+-
+-      # build index once, allow plugins to tune it
+-      context.plugins.each { |p| p.on_index(context) if p.respond_to?(:on_index) }
+-      context.index.build!
+     end
+
+     def repl
+       greet
+
+       reader = TTY::Reader.new
+       loop do
+         command = reader.read_line(PROMPT)
+         break if command.nil? || exit_command?(command.strip)
+
+-        run(command.strip)
++        ask(command.strip)
+       end
+
+       farewell
+     end
+
+     private
+
+     attr_reader :context, :input, :output
+
+     def greet
+-      output.puts("Devagent autonomous REPL. Type 'exit' to quit.")
++      output.puts("Devagent Q&A REPL. Type 'exit' to quit.")
+     end
+
+     def farewell
+       output.puts("Goodbye!")
+       :exited
+     end
+
+     def exit_command?(command)
+       EXIT_COMMANDS.include?(command.downcase)
+     end
+
+-    def run(task)
+-      plan = Planner.plan(ctx: @context, task: task)
+-      output.puts("Planning confidence: #{plan.confidence.round(2)}")
+-
+-      if plan.actions.empty?
+-        # Instead of stopping, fall back to Q&A
+-        output.puts("No actions planned. Asking model directly...")
+-        answer = @context.llm.call(task)
+-        output.puts(answer)
+-        return
+-      end
+-
+-      output.puts("Executing…")
+-      iterate(task, plan)
+-    end
+-
+-    def iterate(task, plan)
+-      (1..@max_iter).each do |i|
+-        output.puts("Iteration #{i}/#{@max_iter}")
+-        @executor.apply(plan.actions)
+-        @executor.log.each { |line| output.puts("  -> #{line}") }
+-
+-        @context.plugins.each { |p| p.on_post_edit(@context, @executor.log.join("\n")) if p.respond_to?(:on_post_edit) }
+-
+-        # Only run tests if we actually changed code (or asked to generate tests)
+-        changed_code = @executor.changes_made?
+-        status = changed_code ? run_tests : :skipped
+-
+-        case status
+-        when :green
+-          @executor.finalize_success!("devagent: #{task}")
+-          output.puts("✅ Tests green. Changes committed.")
+-          return
+-        when :skipped
+-          # No code change or no tests detected; don't pretend success with a commit
+-          output.puts("ℹ️ No tests run (no test framework detected or no code changes).")
+-          return
+-        else
+-          output.puts("Tests red. Replanning…")
+-          feedback = gather_feedback
+-          plan = replan(task, feedback)
+-        end
+-      end
+-
+-      output.puts("❌ Could not get green within #{@max_iter} iterations. Check git diff and logs.")
+-    end
+-
+-    def run_tests
+-      ran_any = false
+-      ok_any  = false
+-
+-      # Try Rails, Gem, React – only count success if a runner actually ran
+-      %w[rails:test gem:test react:test].each do |name|
+-        if try_action_safe(name)
+-          ran_any = true
+-          ok_any  = ($?.respond_to?(:success?) && $?.success?) || ok_any
+-        end
+-      end
+-
+-      return :skipped unless ran_any
+-      ok_any ? :green : :red
+-    end
+-
+-    def try_action(name)
+-      @context.plugins.each do |p|
+-        if p.respond_to?(:on_action)
+-          res = p.on_action(@context, name, {})
+-          return res if res
+-        end
+-      end
+-      nil
+-    end
+-
+-    def try_action_safe(name)
+-      @context.plugins.each do |p|
+-        next unless p.respond_to?(:on_action)
+-        begin
+-          res = p.on_action(@context, name, {})
+-          return true if res # treat truthy as “runner executed”
+-        rescue => e
+-          @executor.log << "test action #{name} failed: #{e.message}"
+-        end
+-      end
+-      false
+-    end
+-
+-    def gather_feedback
+-      diff = `git -C #{@context.repo_path} diff --unified`.to_s
+-      rspec_log = File.exist?(File.join(@context.repo_path, "tmp", "rspec_failures.txt")) ? File.read(File.join(@context.repo_path, "tmp", "rspec_failures.txt")) : ""
+-      [diff, rspec_log].join("\n\n")
+-    end
+-
+-    def replan(task, feedback)
+-      preface = <<~P
+-      #{Planner::SYSTEM}
+-      Previous attempt had failures. Use this feedback to fix:
+-      #{feedback}
+-      P
+-      raw = @context.llm.call(preface + "\nTask:\n" + task + "\nReturn JSON only.")
+-      json = JSON.parse(raw) rescue {"confidence" => 0.0, "actions" => []}
+-      Plan.new(json["actions"] || [], (json["confidence"] || 0.0).to_f)
+-    end
++    def ask(text)
++      begin
++        answer = @context.llm.call(text)
++        output.puts(answer.to_s)
++      rescue => e
++        output.puts("LLM error: #{e.message}")
++        output.puts("Tip: set a valid `model:` in .devagent.yml and ensure it's pulled with `ollama pull <model[:tag]>`.")
++        output.puts("      If Ollama runs elsewhere, export OLLAMA_HOST, e.g.:")
++        output.puts("      export OLLAMA_HOST=\"http://127.0.0.1:11434\"")
++      end
++    end
+   end
+ end
+diff --git a/lib/devagent/ollama.rb b/lib/devagent/ollama.rb
+index 6666666..7777777 100644
+--- a/lib/devagent/ollama.rb
++++ b/lib/devagent/ollama.rb
+@@ -1,52 +1,61 @@
+ # frozen_string_literal: true
+
+ require "json"
+ require "net/http"
+
+ module Devagent
+-  # Ollama wraps local HTTP calls to the Ollama inference server.
++  # Ollama wraps local HTTP calls to the Ollama inference server.
+   class Ollama
+-    ENDPOINT = URI("http://172.29.128.1:11434/api/generate")
++    ENDPOINT = URI("#{ENV.fetch('OLLAMA_HOST', 'http://127.0.0.1:11434')}/api/generate")
+
+     def self.query(prompt, model:)
+-      puts "[Ollama] Prompt: #{prompt[0..200]}..." # truncate for safety
+-      response = perform_request(prompt, model)
+-      pp response
+-      ensure_success!(response)
+-      parsed = parse_response(response.body)
+-      puts "[Ollama] Response: #{parsed[0..200]}..." # truncate
+-      parsed
++      response = perform_request(prompt, model)
++      ensure_success!(response)
++      parse_response(response.body)
+     end
+
+     def self.perform_request(prompt, model)
+       request = Net::HTTP::Post.new(ENDPOINT, "Content-Type" => "application/json")
+       request.body = { model: model, prompt: prompt, stream: false }.to_json
+
+       Net::HTTP.start(ENDPOINT.hostname, ENDPOINT.port) do |http|
+         http.read_timeout = 120
+         http.request(request)
+       end
+     end
+     private_class_method :perform_request
+
+     def self.ensure_success!(response)
+       return if response.is_a?(Net::HTTPSuccess)
+-
+-      raise "Ollama request failed (#{response.code}): #{response.body}"
++      body = response.body.to_s
++      code = response.code.to_i
++      if code == 404 && body.include?("model")
++        raise "Ollama: the configured model was not found. " \
++              "Run `ollama list` and `ollama pull <model[:tag]>`, then set `model:` in .devagent.yml."
++      end
++      raise "Ollama request failed (#{response.code}): #{body}"
+     end
+     private_class_method :ensure_success!
+
+     def self.parse_response(body)
+       parsed = JSON.parse(body)
+       parsed.fetch("response")
+     rescue JSON::ParserError
+       raise "Ollama returned invalid JSON"
+     end
+     private_class_method :parse_response
+   end
+ end
+diff --git a/lib/devagent/diagnostics.rb b/lib/devagent/diagnostics.rb
+deleted file mode 100644
+index 8888888..0000000
+--- a/lib/devagent/diagnostics.rb
++++ /dev/null
+@@ -1,99 +0,0 @@
+-# frozen_string_literal: true
+-
+-module Devagent
+-  # Diagnostics performs lightweight checks to validate configuration and dependencies.
+-  class Diagnostics
+-    def initialize(context, output: $stdout)
+-      @context = context
+-      @output = output
+-    end
+-
+-    def run
+-      output.puts("Running Devagent diagnostics...")
+-      # removed in minimal build
+-      true
+-    end
+-  end
+-end
+diff --git a/lib/devagent/planner.rb b/lib/devagent/planner.rb
+deleted file mode 100644
+index 9999999..0000000
+--- a/lib/devagent/planner.rb
++++ /dev/null
+@@ -1,200 +0,0 @@
+-# removed in minimal build
+diff --git a/lib/devagent/executor.rb b/lib/devagent/executor.rb
+deleted file mode 100644
+index aaaaaaa..0000000
+--- a/lib/devagent/executor.rb
++++ /dev/null
+@@ -1,260 +0,0 @@
+-# removed in minimal build
+diff --git a/lib/devagent/index.rb b/lib/devagent/index.rb
+deleted file mode 100644
+index bbbbbbb..0000000
+--- a/lib/devagent/index.rb
++++ /dev/null
+@@ -1,120 +0,0 @@
+-# removed in minimal build
+diff --git a/lib/devagent/memory.rb b/lib/devagent/memory.rb
+deleted file mode 100644
+index cccccc1..0000000
+--- a/lib/devagent/memory.rb
++++ /dev/null
+@@ -1,80 +0,0 @@
+-# removed in minimal build
+diff --git a/lib/devagent/safety.rb b/lib/devagent/safety.rb
+deleted file mode 100644
+index dddddd2..0000000
+--- a/lib/devagent/safety.rb
++++ /dev/null
+@@ -1,40 +0,0 @@
+-# removed in minimal build
+diff --git a/lib/devagent/util.rb b/lib/devagent/util.rb
+deleted file mode 100644
+index eeeeee3..0000000
+--- a/lib/devagent/util.rb
++++ /dev/null
+@@ -1,60 +0,0 @@
+-# removed in minimal build
+diff --git a/lib/devagent/plugin.rb b/lib/devagent/plugin.rb
+deleted file mode 100644
+index ffffff4..0000000
+--- a/lib/devagent/plugin.rb
++++ /dev/null
+@@ -1,40 +0,0 @@
+-# removed in minimal build
+diff --git a/lib/devagent/plugin_loader.rb b/lib/devagent/plugin_loader.rb
+deleted file mode 100644
+index 1212121..0000000
+--- a/lib/devagent/plugin_loader.rb
++++ /dev/null
+@@ -1,120 +0,0 @@
+-# removed in minimal build
+diff --git a/lib/devagent/plugins/rails.rb b/lib/devagent/plugins/rails.rb
+deleted file mode 100644
+index 1313131..0000000
+--- a/lib/devagent/plugins/rails.rb
++++ /dev/null
+@@ -1,80 +0,0 @@
+-# removed in minimal build
+diff --git a/lib/devagent/plugins/react.rb b/lib/devagent/plugins/react.rb
+deleted file mode 100644
+index 1414141..0000000
+--- a/lib/devagent/plugins/react.rb
++++ /dev/null
+@@ -1,80 +0,0 @@
+-# removed in minimal build
+diff --git a/lib/devagent/plugins/ruby_gem.rb b/lib/devagent/plugins/ruby_gem.rb
+deleted file mode 100644
+index 1515151..0000000
+--- a/lib/devagent/plugins/ruby_gem.rb
++++ /dev/null
+@@ -1,120 +0,0 @@
+-# removed in minimal build
