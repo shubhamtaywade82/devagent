@@ -60,7 +60,10 @@ module Devagent
       output.puts("Planning confidence: #{plan.confidence.round(2)}")
 
       if plan.actions.empty?
-        output.puts("Nothing to do (no actionable steps).")
+        # Instead of stopping, fall back to Q&A
+        output.puts("No actions planned. Asking model directly...")
+        answer = @context.llm.call(task)
+        output.puts(answer)
         return
       end
 
@@ -72,6 +75,7 @@ module Devagent
       (1..@max_iter).each do |i|
         output.puts("Iteration #{i}/#{@max_iter}")
         @executor.apply(plan.actions)
+        @executor.log.each { |line| output.puts("  -> #{line}") }
 
         @context.plugins.each { |p| p.on_post_edit(@context, @executor.log.join("\n")) if p.respond_to?(:on_post_edit) }
 

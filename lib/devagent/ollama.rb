@@ -9,9 +9,12 @@ module Devagent
     ENDPOINT = URI("http://172.29.128.1:11434/api/generate")
 
     def self.query(prompt, model:)
+      puts "[Ollama] Prompt: #{prompt[0..200]}..." # truncate for safety
       response = perform_request(prompt, model)
       ensure_success!(response)
-      parse_response(response.body)
+      parsed = parse_response(response.body)
+      puts "[Ollama] Response: #{parsed[0..200]}..." # truncate
+      parsed
     end
 
     def self.perform_request(prompt, model)
