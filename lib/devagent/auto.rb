@@ -58,6 +58,12 @@ module Devagent
     def run(task)
       plan = Planner.plan(ctx: @context, task: task)
       output.puts("Planning confidence: #{plan.confidence.round(2)}")
+
+      if plan.actions.empty?
+        output.puts("Nothing to do (no actionable steps).")
+        return
+      end
+
       output.puts("Executing…")
       iterate(task, plan)
     end
@@ -67,36 +73,45 @@ module Devagent
         output.puts("Iteration #{i}/#{@max_iter}")
         @executor.apply(plan.actions)
 
-        # plugin post-processing (formatters, etc.)
         @context.plugins.each { |p| p.on_post_edit(@context, @executor.log.join("\n")) if p.respond_to?(:on_post_edit) }
 
-        status = run_tests
-        if status == :green
+        # Only run tests if we actually changed code (or asked to generate tests)
+        changed_code = @executor.changes_made?
+        status = changed_code ? run_tests : :skipped
+
+        case status
+        when :green
           @executor.finalize_success!("devagent: #{task}")
           output.puts("✅ Tests green. Changes committed.")
           return
+        when :skipped
+          # No code change or no tests detected; don't pretend success with a commit
+          output.puts("ℹ️ No tests run (no test framework detected or no code changes).")
+          return
+        else
+          output.puts("Tests red. Replanning…")
+          feedback = gather_feedback
+          plan = replan(task, feedback)
         end
-
-        output.puts("Tests red. Replanning…")
-        feedback = gather_feedback
-        plan = replan(task, feedback)
       end
 
       output.puts("❌ Could not get green within #{@max_iter} iterations. Check git diff and logs.")
     end
 
     def run_tests
-      if File.exist?(File.join(@context.repo_path, "bin", "rails"))
-        return :green if try_action_safe("rails:test")
-      elsif Dir.glob(File.join(@context.repo_path, "*.gemspec")).any?
-        return :green if try_action_safe("gem:test")
-      elsif File.exist?(File.join(@context.repo_path, "package.json"))
-        return :green if try_action_safe("react:test")
-      else
-        @executor.log << "No test framework detected, skipping tests."
-        return :green
+      ran_any = false
+      ok_any  = false
+
+      # Try Rails, Gem, React – only count success if a runner actually ran
+      %w[rails:test gem:test react:test].each do |name|
+        if try_action_safe(name)
+          ran_any = true
+          ok_any  = ($?.respond_to?(:success?) && $?.success?) || ok_any
+        end
       end
-      :red
+
+      return :skipped unless ran_any
+      ok_any ? :green : :red
     end
 
     def try_action(name)
@@ -113,11 +128,10 @@ module Devagent
       @context.plugins.each do |p|
         next unless p.respond_to?(:on_action)
         begin
-          ran = p.on_action(@context, name, {})
-          return true if ran # on_action returns truthy when it actually ran a runner
+          res = p.on_action(@context, name, {})
+          return true if res # treat truthy as “runner executed”
         rescue => e
           @executor.log << "test action #{name} failed: #{e.message}"
-          # continue to next plugin/runner
         end
       end
       false

@@ -27,14 +27,13 @@ module Devagent
       @dry_run = ctx.config.dig("auto", "dry_run") ? true : false
       @log = []
       @snapshot_ref = nil
+      @changed = false
     end
 
     def snapshot!
       return if @dry_run || !git_repo?
-
       run_and_log_system("git", "-C", @repo, "add", "-A")
-      run_and_log_system("git", "-C", @repo, "commit",
-                        "-m", "devagent: pre-change snapshot", "--allow-empty")
+      run_and_log_system("git", "-C", @repo, "commit", "-m", "devagent: pre-change snapshot", "--allow-empty")
       @snapshot_ref = `git -C #{@repo} rev-parse HEAD`.strip
     end
 
@@ -44,8 +43,7 @@ module Devagent
     end
 
     def finalize_success!(message = "devagent: implement request")
-      return if @dry_run || !git_repo?
-
+      return if @dry_run || !git_repo? || !changes_made?
       run_and_log_system("git", "-C", @repo, "add", "-A")
       run_and_log_system("git", "-C", @repo, "commit", "-m", message)
     end
@@ -80,7 +78,7 @@ module Devagent
       guard_path!(relative_path)
       @log << "create_file #{relative_path}"
       return if @dry_run
-
+      @changed = true
       absolute = File.join(@repo, relative_path)
       FileUtils.mkdir_p(File.dirname(absolute))
       File.write(absolute, content)
@@ -89,27 +87,23 @@ module Devagent
     def edit_file(relative_path, content, _whole_file)
       guard_path!(relative_path)
       raise "content required for edit" if content.nil?
-
       absolute = File.join(@repo, relative_path)
       original = File.exist?(absolute) ? File.read(absolute) : ""
       rendered_diff = Diffy::Diff.new(original, content, context: 3).to_s(:text)
       @log << "edit_file #{relative_path}"
       @log << rendered_diff unless rendered_diff.empty?
       return if @dry_run
-
+      @changed = true
       FileUtils.mkdir_p(File.dirname(absolute))
       File.write(absolute, content)
     end
 
     def apply_patch(patch)
       raise "patch required" if patch.to_s.strip.empty?
-
       @log << "apply_patch"
       return if @dry_run
-
-      IO.popen(["git", "-C", @repo, "apply", "--reject", "--whitespace=fix", "-"], "w") do |io|
-        io.write(patch)
-      end
+      @changed = true
+      IO.popen(["git", "-C", @repo, "apply", "--reject", "--whitespace=fix", "-"], "w") { |io| io.write(patch) }
       raise "git apply failed" unless $CHILD_STATUS&.success?
     end
 
@@ -170,6 +164,7 @@ module Devagent
     def create_spec_from_source(path)
       source_path = File.join(@repo, path)
       content = File.read(source_path)
+      @changed = true
       spec_prompt = "Write comprehensive RSpec for this file:\n\n#{content}"
       spec = @ctx.llm.call(spec_prompt)
       spec_path = guess_spec_path(path)
@@ -193,6 +188,10 @@ module Devagent
 
     def run_and_log_system(*cmd)
       system(*cmd)
+    end
+
+    def changes_made?
+      @changed
     end
   end
   # rubocop:enable Metrics/ClassLength

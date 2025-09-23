@@ -25,29 +25,25 @@ module Devagent
       end
 
       def self.on_action(ctx, name, _args = {})
-        case name
-        when "gem:test"
-          repo = ctx.repo_path
-          gemfile = File.join(repo, "Gemfile")
-          rspec_ok = rspec_available?(repo)
+        return unless name == "gem:test"
+        repo = ctx.repo_path
+        gemfile = File.join(repo, "Gemfile")
+        return nil unless File.exist?(gemfile)
 
-          unless rspec_ok
-            # If we can, add rspec and initialize the suite once.
-            if File.exist?(gemfile)
-              begin
-                ctx.shell.call("bundle add rspec", chdir: repo)
-                ctx.shell.call("bundle exec rspec --init", chdir: repo)
-                rspec_ok = true
-              rescue => e
-                return nil # don't crash test step; another plugin may handle tests
-              end
-            else
-              return nil
-            end
+        # Probe rspec
+        rspec_ok = system({"BUNDLE_GEMFILE"=>gemfile}, "bash", "-lc", "cd #{Shellwords.escape(repo)} && bundle exec rspec -v > /dev/null 2>&1")
+        unless rspec_ok
+          # Try to add and init; if that fails, don’t claim a run
+          begin
+            ctx.shell.call("bundle add rspec", chdir: repo)
+            ctx.shell.call("bundle exec rspec --init", chdir: repo)
+          rescue
+            return nil
           end
-
-          ctx.shell.call("bundle exec rspec --format documentation", chdir: repo) if rspec_ok
         end
+
+        ctx.shell.call("bundle exec rspec --format documentation", chdir: repo)
+        true
       end
 
       def self.rspec_available?(repo)

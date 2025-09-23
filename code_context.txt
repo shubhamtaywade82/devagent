@@ -82,6 +82,12 @@ module Devagent
     def run(task)
       plan = Planner.plan(ctx: @context, task: task)
       output.puts("Planning confidence: #{plan.confidence.round(2)}")
+
+      if plan.actions.empty?
+        output.puts("Nothing to do (no actionable steps).")
+        return
+      end
+
       output.puts("Executing…")
       iterate(task, plan)
     end
@@ -91,29 +97,45 @@ module Devagent
         output.puts("Iteration #{i}/#{@max_iter}")
         @executor.apply(plan.actions)
 
-        # plugin post-processing (formatters, etc.)
         @context.plugins.each { |p| p.on_post_edit(@context, @executor.log.join("\n")) if p.respond_to?(:on_post_edit) }
 
-        status = run_tests
-        if status == :green
+        # Only run tests if we actually changed code (or asked to generate tests)
+        changed_code = @executor.changes_made?
+        status = changed_code ? run_tests : :skipped
+
+        case status
+        when :green
           @executor.finalize_success!("devagent: #{task}")
           output.puts("✅ Tests green. Changes committed.")
           return
+        when :skipped
+          # No code change or no tests detected; don't pretend success with a commit
+          output.puts("ℹ️ No tests run (no test framework detected or no code changes).")
+          return
+        else
+          output.puts("Tests red. Replanning…")
+          feedback = gather_feedback
+          plan = replan(task, feedback)
         end
-
-        output.puts("Tests red. Replanning…")
-        feedback = gather_feedback
-        plan = replan(task, feedback)
       end
 
       output.puts("❌ Could not get green within #{@max_iter} iterations. Check git diff and logs.")
     end
 
     def run_tests
-      return :green if try_action_safe("rails:test")
-      return :green if try_action_safe("gem:test")
-      return :green if try_action_safe("react:test")
-      :red
+      ran_any = false
+      ok_any  = false
+
+      # Try Rails, Gem, React – only count success if a runner actually ran
+      %w[rails:test gem:test react:test].each do |name|
+        if try_action_safe(name)
+          ran_any = true
+          ok_any  = ($?.respond_to?(:success?) && $?.success?) || ok_any
+        end
+      end
+
+      return :skipped unless ran_any
+      ok_any ? :green : :red
     end
 
     def try_action(name)
@@ -130,11 +152,10 @@ module Devagent
       @context.plugins.each do |p|
         next unless p.respond_to?(:on_action)
         begin
-          ran = p.on_action(@context, name, {})
-          return true if ran # on_action returns truthy when it actually ran a runner
+          res = p.on_action(@context, name, {})
+          return true if res # treat truthy as “runner executed”
         rescue => e
           @executor.log << "test action #{name} failed: #{e.message}"
-          # continue to next plugin/runner
         end
       end
       false
@@ -323,6 +344,14 @@ module Devagent
       "response: #{text}"
     end
 
+    def check_repo
+      if File.directory?(File.join(context.repo_path, ".git"))
+        "git repo detected"
+      else
+        "⚠ not a git repo, snapshots/commits disabled"
+      end
+    end
+
     def configured_model
       model = (context.config || {})["model"].to_s
       raise "LLM model not configured. Set `model` in .devagent.yml." if model.empty?
@@ -369,28 +398,25 @@ module Devagent
       @dry_run = ctx.config.dig("auto", "dry_run") ? true : false
       @log = []
       @snapshot_ref = nil
+      @changed = false
     end
 
     def snapshot!
-      return if @dry_run
-      # Create a stash snapshot of current state without altering history
-      system("git", "-C", @repo, "stash", "push", "-u", "-k", "-m", "devagent: pre-change snapshot")
-      @snapshot_stash = `git -C #{@repo} stash list`.lines.find { |l| l.include?("devagent: pre-change snapshot") }&.split(":")&.first
+      return if @dry_run || !git_repo?
+      run_and_log_system("git", "-C", @repo, "add", "-A")
+      run_and_log_system("git", "-C", @repo, "commit", "-m", "devagent: pre-change snapshot", "--allow-empty")
+      @snapshot_ref = `git -C #{@repo} rev-parse HEAD`.strip
     end
 
     def rollback!
-      return if @dry_run
-      # Discard our changes and restore previous working tree from stash
-      system("git", "-C", @repo, "reset", "--hard")
-      system("git", "-C", @repo, "stash", "apply", @snapshot_stash) if @snapshot_stash
+      return if @dry_run || !git_repo? || @snapshot_ref.nil?
+      run_and_log_system("git", "-C", @repo, "reset", "--hard", @snapshot_ref)
     end
 
     def finalize_success!(message = "devagent: implement request")
-      return if @dry_run
-      # Drop the snapshot; commit only what DevAgent actually changed
-      system("git", "-C", @repo, "stash", "drop", @snapshot_stash) if @snapshot_stash
-      system("git", "-C", @repo, "add", "-A")
-      system("git", "-C", @repo, "commit", "-m", message)
+      return if @dry_run || !git_repo? || !changes_made?
+      run_and_log_system("git", "-C", @repo, "add", "-A")
+      run_and_log_system("git", "-C", @repo, "commit", "-m", message)
     end
 
     def apply(plan)
@@ -407,6 +433,10 @@ module Devagent
       run_command(command)
     end
 
+    def git_repo?
+      File.directory?(File.join(@repo, ".git"))
+    end
+
     def apply_action(action)
       type = action.fetch("type")
       handler = ACTION_HANDLERS[type]
@@ -419,7 +449,7 @@ module Devagent
       guard_path!(relative_path)
       @log << "create_file #{relative_path}"
       return if @dry_run
-
+      @changed = true
       absolute = File.join(@repo, relative_path)
       FileUtils.mkdir_p(File.dirname(absolute))
       File.write(absolute, content)
@@ -428,27 +458,23 @@ module Devagent
     def edit_file(relative_path, content, _whole_file)
       guard_path!(relative_path)
       raise "content required for edit" if content.nil?
-
       absolute = File.join(@repo, relative_path)
       original = File.exist?(absolute) ? File.read(absolute) : ""
       rendered_diff = Diffy::Diff.new(original, content, context: 3).to_s(:text)
       @log << "edit_file #{relative_path}"
       @log << rendered_diff unless rendered_diff.empty?
       return if @dry_run
-
+      @changed = true
       FileUtils.mkdir_p(File.dirname(absolute))
       File.write(absolute, content)
     end
 
     def apply_patch(patch)
       raise "patch required" if patch.to_s.strip.empty?
-
       @log << "apply_patch"
       return if @dry_run
-
-      IO.popen(["git", "-C", @repo, "apply", "--reject", "--whitespace=fix", "-"], "w") do |io|
-        io.write(patch)
-      end
+      @changed = true
+      IO.popen(["git", "-C", @repo, "apply", "--reject", "--whitespace=fix", "-"], "w") { |io| io.write(patch) }
       raise "git apply failed" unless $CHILD_STATUS&.success?
     end
 
@@ -509,6 +535,7 @@ module Devagent
     def create_spec_from_source(path)
       source_path = File.join(@repo, path)
       content = File.read(source_path)
+      @changed = true
       spec_prompt = "Write comprehensive RSpec for this file:\n\n#{content}"
       spec = @ctx.llm.call(spec_prompt)
       spec_path = guess_spec_path(path)
@@ -532,6 +559,10 @@ module Devagent
 
     def run_and_log_system(*cmd)
       system(*cmd)
+    end
+
+    def changes_made?
+      @changed
     end
   end
   # rubocop:enable Metrics/ClassLength
@@ -1066,29 +1097,25 @@ module Devagent
       end
 
       def self.on_action(ctx, name, _args = {})
-        case name
-        when "gem:test"
-          repo = ctx.repo_path
-          gemfile = File.join(repo, "Gemfile")
-          rspec_ok = rspec_available?(repo)
+        return unless name == "gem:test"
+        repo = ctx.repo_path
+        gemfile = File.join(repo, "Gemfile")
+        return nil unless File.exist?(gemfile)
 
-          unless rspec_ok
-            # If we can, add rspec and initialize the suite once.
-            if File.exist?(gemfile)
-              begin
-                ctx.shell.call("bundle add rspec", chdir: repo)
-                ctx.shell.call("bundle exec rspec --init", chdir: repo)
-                rspec_ok = true
-              rescue => e
-                return nil # don't crash test step; another plugin may handle tests
-              end
-            else
-              return nil
-            end
+        # Probe rspec
+        rspec_ok = system({"BUNDLE_GEMFILE"=>gemfile}, "bash", "-lc", "cd #{Shellwords.escape(repo)} && bundle exec rspec -v > /dev/null 2>&1")
+        unless rspec_ok
+          # Try to add and init; if that fails, don’t claim a run
+          begin
+            ctx.shell.call("bundle add rspec", chdir: repo)
+            ctx.shell.call("bundle exec rspec --init", chdir: repo)
+          rescue
+            return nil
           end
-
-          ctx.shell.call("bundle exec rspec --format documentation", chdir: repo) if rspec_ok
         end
+
+        ctx.shell.call("bundle exec rspec --format documentation", chdir: repo)
+        true
       end
 
       def self.rspec_available?(repo)
