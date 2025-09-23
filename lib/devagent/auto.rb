@@ -102,6 +102,21 @@ module Devagent
       nil
     end
 
+    def try_action_safe(name)
+      @context.plugins.each do |p|
+        next unless p.respond_to?(:on_action)
+        begin
+          res = p.on_action(@context, name, {})
+          # If the plugin ran tests successfully, shell.call didn’t raise.
+          return true if res
+        rescue => e
+          @executor.log << "test action #{name} failed: #{e.message}"
+          # keep trying other runners
+        end
+      end
+      false
+    end
+
     def gather_feedback
       diff = `git -C #{@context.repo_path} diff --unified`.to_s
       rspec_log = File.exist?(File.join(@context.repo_path, "tmp", "rspec_failures.txt")) ? File.read(File.join(@context.repo_path, "tmp", "rspec_failures.txt")) : ""
