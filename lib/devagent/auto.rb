@@ -86,10 +86,10 @@ module Devagent
     end
 
     def run_tests
-      # prefer Rails, then gem, then React
-      handled = try_action("rails:test") || try_action("gem:test") || try_action("react:test")
-      ok = $?.success? rescue false
-      ok ? :green : :red
+      return :green if try_action_safe("rails:test")
+      return :green if try_action_safe("gem:test")
+      return :green if try_action_safe("react:test")
+      :red
     end
 
     def try_action(name)
