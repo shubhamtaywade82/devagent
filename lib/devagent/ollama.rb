@@ -11,6 +11,7 @@ module Devagent
     def self.query(prompt, model:)
       puts "[Ollama] Prompt: #{prompt[0..200]}..." # truncate for safety
       response = perform_request(prompt, model)
+      pp response
       ensure_success!(response)
       parsed = parse_response(response.body)
       puts "[Ollama] Response: #{parsed[0..200]}..." # truncate
