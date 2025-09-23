@@ -84,7 +84,10 @@ module Devagent
       output.puts("Planning confidence: #{plan.confidence.round(2)}")
 
       if plan.actions.empty?
-        output.puts("Nothing to do (no actionable steps).")
+        # Instead of stopping, fall back to Q&A
+        output.puts("No actions planned. Asking model directly...")
+        answer = @context.llm.call(task)
+        output.puts(answer)
         return
       end
 
@@ -96,6 +99,7 @@ module Devagent
       (1..@max_iter).each do |i|
         output.puts("Iteration #{i}/#{@max_iter}")
         @executor.apply(plan.actions)
+        @executor.log.each { |line| output.puts("  -> #{line}") }
 
         @context.plugins.each { |p| p.on_post_edit(@context, @executor.log.join("\n")) if p.respond_to?(:on_post_edit) }
 
@@ -713,9 +717,13 @@ module Devagent
     ENDPOINT = URI("http://172.29.128.1:11434/api/generate")
 
     def self.query(prompt, model:)
+      puts "[Ollama] Prompt: #{prompt[0..200]}..." # truncate for safety
       response = perform_request(prompt, model)
+      pp response
       ensure_success!(response)
-      parse_response(response.body)
+      parsed = parse_response(response.body)
+      puts "[Ollama] Response: #{parsed[0..200]}..." # truncate
+      parsed
     end
 
     def self.perform_request(prompt, model)
