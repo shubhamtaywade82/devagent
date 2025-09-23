@@ -58,6 +58,14 @@ module Devagent
       "response: #{text}"
     end
 
+    def check_repo
+      if File.directory?(File.join(context.repo_path, ".git"))
+        "git repo detected"
+      else
+        "⚠ not a git repo, snapshots/commits disabled"
+      end
+    end
+
     def configured_model
       model = (context.config || {})["model"].to_s
       raise "LLM model not configured. Set `model` in .devagent.yml." if model.empty?

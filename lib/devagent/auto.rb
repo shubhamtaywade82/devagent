@@ -86,9 +86,16 @@ module Devagent
     end
 
     def run_tests
-      return :green if try_action_safe("rails:test")
-      return :green if try_action_safe("gem:test")
-      return :green if try_action_safe("react:test")
+      if File.exist?(File.join(@context.repo_path, "bin", "rails"))
+        return :green if try_action_safe("rails:test")
+      elsif Dir.glob(File.join(@context.repo_path, "*.gemspec")).any?
+        return :green if try_action_safe("gem:test")
+      elsif File.exist?(File.join(@context.repo_path, "package.json"))
+        return :green if try_action_safe("react:test")
+      else
+        @executor.log << "No test framework detected, skipping tests."
+        return :green
+      end
       :red
     end
 
@@ -106,12 +113,11 @@ module Devagent
       @context.plugins.each do |p|
         next unless p.respond_to?(:on_action)
         begin
-          res = p.on_action(@context, name, {})
-          # If the plugin ran tests successfully, shell.call didn’t raise.
-          return true if res
+          ran = p.on_action(@context, name, {})
+          return true if ran # on_action returns truthy when it actually ran a runner
         rescue => e
           @executor.log << "test action #{name} failed: #{e.message}"
-          # keep trying other runners
+          # continue to next plugin/runner
         end
       end
       false

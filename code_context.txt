@@ -110,10 +110,10 @@ module Devagent
     end
 
     def run_tests
-      # prefer Rails, then gem, then React
-      handled = try_action("rails:test") || try_action("gem:test") || try_action("react:test")
-      ok = $?.success? rescue false
-      ok ? :green : :red
+      return :green if try_action_safe("rails:test")
+      return :green if try_action_safe("gem:test")
+      return :green if try_action_safe("react:test")
+      :red
     end
 
     def try_action(name)
@@ -124,6 +124,20 @@ module Devagent
         end
       end
       nil
+    end
+
+    def try_action_safe(name)
+      @context.plugins.each do |p|
+        next unless p.respond_to?(:on_action)
+        begin
+          ran = p.on_action(@context, name, {})
+          return true if ran # on_action returns truthy when it actually ran a runner
+        rescue => e
+          @executor.log << "test action #{name} failed: #{e.message}"
+          # continue to next plugin/runner
+        end
+      end
+      false
     end
 
     def gather_feedback
@@ -359,23 +373,24 @@ module Devagent
 
     def snapshot!
       return if @dry_run
-
-      run_and_log_system("git", "-C", @repo, "add", "-A")
-      run_and_log_system("git", "-C", @repo, "commit", "-m", "devagent: pre-change snapshot", "--allow-empty")
-      @snapshot_ref = `git -C #{@repo} rev-parse HEAD`.strip
+      # Create a stash snapshot of current state without altering history
+      system("git", "-C", @repo, "stash", "push", "-u", "-k", "-m", "devagent: pre-change snapshot")
+      @snapshot_stash = `git -C #{@repo} stash list`.lines.find { |l| l.include?("devagent: pre-change snapshot") }&.split(":")&.first
     end
 
     def rollback!
-      return if @dry_run || @snapshot_ref.nil?
-
-      run_and_log_system("git", "-C", @repo, "reset", "--hard", @snapshot_ref)
+      return if @dry_run
+      # Discard our changes and restore previous working tree from stash
+      system("git", "-C", @repo, "reset", "--hard")
+      system("git", "-C", @repo, "stash", "apply", @snapshot_stash) if @snapshot_stash
     end
 
     def finalize_success!(message = "devagent: implement request")
       return if @dry_run
-
-      run_and_log_system("git", "-C", @repo, "add", "-A")
-      run_and_log_system("git", "-C", @repo, "commit", "-m", message)
+      # Drop the snapshot; commit only what DevAgent actually changed
+      system("git", "-C", @repo, "stash", "drop", @snapshot_stash) if @snapshot_stash
+      system("git", "-C", @repo, "add", "-A")
+      system("git", "-C", @repo, "commit", "-m", message)
     end
 
     def apply(plan)
@@ -1053,7 +1068,35 @@ module Devagent
       def self.on_action(ctx, name, _args = {})
         case name
         when "gem:test"
-          ctx.shell.call("bundle exec rspec", chdir: ctx.repo_path)
+          repo = ctx.repo_path
+          gemfile = File.join(repo, "Gemfile")
+          rspec_ok = rspec_available?(repo)
+
+          unless rspec_ok
+            # If we can, add rspec and initialize the suite once.
+            if File.exist?(gemfile)
+              begin
+                ctx.shell.call("bundle add rspec", chdir: repo)
+                ctx.shell.call("bundle exec rspec --init", chdir: repo)
+                rspec_ok = true
+              rescue => e
+                return nil # don't crash test step; another plugin may handle tests
+              end
+            else
+              return nil
+            end
+          end
+
+          ctx.shell.call("bundle exec rspec --format documentation", chdir: repo) if rspec_ok
+        end
+      end
+
+      def self.rspec_available?(repo)
+        begin
+          out = `cd #{Shellwords.escape(repo)} && bundle exec rspec -v 2>&1`
+          $?.success?
+        rescue
+          false
         end
       end
     end

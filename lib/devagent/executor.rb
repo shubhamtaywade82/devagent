@@ -30,21 +30,21 @@ module Devagent
     end
 
     def snapshot!
-      return if @dry_run
+      return if @dry_run || !git_repo?
 
       run_and_log_system("git", "-C", @repo, "add", "-A")
-      run_and_log_system("git", "-C", @repo, "commit", "-m", "devagent: pre-change snapshot", "--allow-empty")
+      run_and_log_system("git", "-C", @repo, "commit",
+                        "-m", "devagent: pre-change snapshot", "--allow-empty")
       @snapshot_ref = `git -C #{@repo} rev-parse HEAD`.strip
     end
 
     def rollback!
-      return if @dry_run || @snapshot_ref.nil?
-
+      return if @dry_run || !git_repo? || @snapshot_ref.nil?
       run_and_log_system("git", "-C", @repo, "reset", "--hard", @snapshot_ref)
     end
 
     def finalize_success!(message = "devagent: implement request")
-      return if @dry_run
+      return if @dry_run || !git_repo?
 
       run_and_log_system("git", "-C", @repo, "add", "-A")
       run_and_log_system("git", "-C", @repo, "commit", "-m", message)
@@ -62,6 +62,10 @@ module Devagent
 
     def run_tests!(command = "bundle exec rspec")
       run_command(command)
+    end
+
+    def git_repo?
+      File.directory?(File.join(@repo, ".git"))
     end
 
     def apply_action(action)
