@@ -8,7 +8,7 @@ module Devagent
 
   module Context
     DEFAULTS = {
-      "model" => "llama3.1:8b",
+      "model" => "deepseek-coder:6.7b",
       "auto"  => {
         "allowlist" => ["**/*"],
         "denylist"  => ["node_modules/**", ".git/**", "tmp/**", "log/**"]

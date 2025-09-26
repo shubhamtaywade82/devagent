@@ -9,7 +9,7 @@ module Devagent
     SYSTEM = <<~SYS
       You are a senior software engineer. Return ONLY valid JSON.
 
-      JSON:
+      EXAMPLE JSON:
       {
         "confidence": 0.0-1.0,
         "actions": [
@@ -19,11 +19,11 @@ module Devagent
         ]
       }
 
-      Constraints:
-      - All paths MUST be relative and inside the repository.
-      - Prefer small, minimal sets of actions.
-      - For edits, provide the entire final file content (no partial patches).
-      - If no actions are appropriate, return {"confidence": 0.0, "actions": []}.
+      - Paths must be INSIDE the repository and relative.
+      - For creating or modifying files, ALWAYS use {"type":"create_file"|"edit_file"} with full final content.
+      - DO NOT use run_command to write files or use shell redirection (no '>', '>>', here-strings, tee, etc.).
+      - Prefer unified diffs (apply_patch) only when explicitly requested; otherwise send full content via edit_file.
+      - Keep plans minimal and safe.
     SYS
 
     def self.plan(ctx:, task:)

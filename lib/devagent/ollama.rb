@@ -31,6 +31,9 @@ module Devagent
       if code == 404 && body.include?("model")
         raise "Ollama: the configured model was not found. Run `ollama list` and `ollama pull <model[:tag]>`, then set `model:` in .devagent.yml."
       end
+      if code == 500 && body.include?("more system memory")
+        raise "Ollama: the model needs more system memory than is available. Choose a smaller or quantized model and update `model` in .devagent.yml."
+      end
       raise "Ollama request failed (#{response.code}): #{body}"
     end
     private_class_method :ensure_success!

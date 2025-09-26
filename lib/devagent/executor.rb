@@ -60,7 +60,10 @@ module Devagent
 
     def run_command(cmd)
       @log << "run: #{cmd}"
-      Util.run!(cmd, chdir: @repo)
+      if command =~ /(^|\s)(>|>>)\s/ || command.include?("<<") || command =~ /\btee\b/
+        raise "run_command forbids writing files via shell redirection. Use create_file/edit_file actions instead."
+      end
+      Util.run!(command, chdir: @repo)
     end
 
     def guard!(rel)
