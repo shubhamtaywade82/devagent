@@ -107,7 +107,7 @@ module Devagent
       end
 
       def stream_chat_endpoint(output, color)
-        @conn.post("/api/chat") do |req|
+        response = @conn.post("/api/chat") do |req|
           req.headers["Content-Type"] = "application/json"
           req.body = JSON.generate(
             model: @model,
@@ -118,6 +118,9 @@ module Devagent
             process_chunk(chunk, output, color)
           end
         end
+
+        finalize_stream(output, color)
+        handle_chat_completion(response, output, color) if @assistant_response_content.empty?
       end
 
       def stream_legacy_endpoint(output, color)
@@ -134,6 +137,7 @@ module Devagent
           end
         end
 
+        finalize_stream(output, color)
         handle_legacy_completion(response, output, color)
       end
 
@@ -163,34 +167,7 @@ module Devagent
       end
 
       def handle_legacy_completion(response, output, color)
-        body = response&.body
-        unless body
-          response_started!
-          return
-        end
-
-        body.split("\n").each do |raw_line|
-          next if raw_line.strip.empty?
-
-          line = normalize_line(raw_line)
-          next if line.nil?
-
-          data = safe_parse_json(line)
-          next unless data
-
-          response_started!
-
-          content = data["response"]
-          next unless content
-
-          @assistant_response_content << content
-          output.print(Paint[content, color])
-          output.flush if output.respond_to?(:flush)
-          log_info("chat.chunk", text: content)
-        end
-
-        response_started!
-        nil
+        process_response_body(response&.body, output, color)
       end
 
       def safe_parse_json(line)
@@ -203,6 +180,7 @@ module Devagent
         stripped = line.sub(/\Adata:\s*/, "")
         stripped = stripped.sub(/\Aevent:\s*\w+\s*/, "")
         stripped = stripped.strip
+        stripped = stripped.chomp(',')
         return nil if stripped.empty? || stripped == "[DONE]"
 
         stripped
@@ -226,32 +204,86 @@ module Devagent
             next
           end
 
-          response_started!
-
-          if data["error"]
-            output.print(Paint["\nError: #{data["error"]}\n", :red])
-            output.flush if output.respond_to?(:flush)
-            next
-          end
-
-          content = extract_content(data)
-
-          if content
-            @assistant_response_content << content
-            output.print(Paint[content, color])
-            output.flush if output.respond_to?(:flush)
-            log_info("chat.chunk", text: content)
-          end
-
-          next unless data["done"]
-
-          if data["done_reason"] == "stop"
-            # normal completion
-          elsif data["done_reason"]
-            output.print(Paint["\n(#{data["done_reason"]})", :yellow])
-            output.flush if output.respond_to?(:flush)
-          end
+          handle_parsed_chunk(data, raw_line, output, color)
         end
+      end
+
+      def handle_chat_completion(response, output, color)
+        process_response_body(response&.body, output, color)
+      end
+
+      def process_response_body(body, output, color)
+        return if body.nil? || body.empty?
+
+        log_debug("chat.response.body", body: body)
+
+        split_payload(body).each do |raw_line|
+          next if raw_line.strip.empty?
+
+          line = normalize_line(raw_line)
+          next if line.nil?
+
+          data = safe_parse_json(line)
+          next unless data
+
+          handle_parsed_chunk(data, raw_line, output, color)
+        end
+      end
+
+      def handle_parsed_chunk(data, raw_line, output, color)
+        return unless data
+
+        response_started!
+        log_debug("chat.chunk.raw", raw: raw_line, parsed: data)
+
+        if data["error"]
+          output.print(Paint["\nError: #{data["error"]}\n", :red])
+          output.flush if output.respond_to?(:flush)
+          return
+        end
+
+        content = extract_content(data)
+
+        if content && !content.empty?
+          @assistant_response_content << content
+          output.print(Paint[content, color])
+          output.flush if output.respond_to?(:flush)
+          log_info("chat.chunk", text: content)
+        end
+
+        handle_done_reason(data, output)
+      end
+
+      def handle_done_reason(data, output)
+        return unless data["done"]
+
+        done_reason = data["done_reason"]
+        return if done_reason.nil? || done_reason == "stop"
+
+        chunk_message = data["message"]
+        content = extract_message_content(chunk_message)
+        if content && !content.empty?
+          @assistant_response_content << content
+          output.print(Paint[content, color])
+          output.flush if output.respond_to?(:flush)
+          log_info("chat.chunk", text: content)
+        end
+
+        output.print(Paint["\n(#{done_reason})", :yellow])
+        output.flush if output.respond_to?(:flush)
+      end
+
+      def finalize_stream(output, color)
+        return if @json_buffer.nil? || @json_buffer.strip.empty?
+
+        buffer = @json_buffer.dup
+        @json_buffer = String.new
+        process_response_body(buffer, output, color)
+      end
+
+      def split_payload(payload)
+        normalized = payload.gsub(/}\s*{/, "}\n{")
+        normalized.split("\n")
       end
 
       def response_started!
@@ -262,27 +294,58 @@ module Devagent
       end
 
       def extract_content(data)
-        if data["message"]
-          interpret_message_content(data["message"]["content"])
-        elsif data["response"]
+        return unless data.is_a?(Hash)
+
+        if data.key?("message")
+          extract_message_content(data["message"])
+        elsif data.key?("delta")
+          extract_message_content(data["delta"])
+        elsif data.key?("response")
           data["response"].to_s
+        elsif data.key?("content")
+          interpret_message_content(data["content"])
+        elsif data.key?("text")
+          data["text"].to_s
+        end
+      end
+
+      def extract_message_content(message)
+        return if message.nil?
+
+        if message.is_a?(Hash)
+          if message.key?("content")
+            interpret_message_content(message["content"])
+          elsif message.key?("delta")
+            extract_message_content(message["delta"])
+          elsif message.key?("text")
+            message["text"].to_s
+          elsif message.key?("message")
+            extract_message_content(message["message"])
+          end
+        elsif message.is_a?(Array)
+          interpret_message_content(message)
+        else
+          message.to_s
         end
       end
 
       def interpret_message_content(content)
+        return if content.nil?
+
         case content
         when String
           content
         when Array
           content.map do |part|
             if part.is_a?(Hash)
-              part["text"] || part["content"] || part.values_at("value", "data").compact.join
+              part["text"] || part["content"] || part.values_at("value", "data", "delta").compact.join
             else
               part.to_s
             end
           end.join
         when Hash
-          content["text"] || content["content"] || content.values.compact.join
+          content["text"] || content["content"] || content["value"] || content["data"] ||
+            content.values.select { |value| value.is_a?(String) }.join
         end
       end
 
