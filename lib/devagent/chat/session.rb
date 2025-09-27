@@ -94,12 +94,13 @@ module Devagent
       end
 
       def stream_with_spinner(input)
-        spinner = TTY::Spinner.new("[:spinner] Thinking...", format: :dots, output: @output)
+        spinner = TTY::Spinner.new("[:spinner] Thinking...", format: :dots, output: @output, clear: true)
         spinner_stopped = false
-        stop_spinner = lambda do |message = "done"|
+        stop_spinner = lambda do |message = nil, color = :yellow|
           next if spinner_stopped
 
-          spinner.stop(" #{message}")
+          spinner.stop
+          @output.puts(Paint[message, color]) if message && !message.empty?
           spinner_stopped = true
         rescue StandardError
           spinner_stopped = true
@@ -113,20 +114,20 @@ module Devagent
           output: @output,
           on_response_start: lambda do
             response_started = true
-            stop_spinner.call("response received")
+            stop_spinner.call
           end
         )
         summary = @client.last_response_summary || "(no content)"
         @logger&.success("chat.response", text: summary)
       rescue Faraday::Error => e
-        stop_spinner.call("error")
+        stop_spinner.call("Error contacting Ollama", :red)
         @logger&.error("chat.stream", error: e.message)
       rescue StandardError => e
-        stop_spinner.call("error")
+        stop_spinner.call("Unexpected error during chat", :red)
         @logger&.error("chat.stream", error: e.message)
         raise
       ensure
-        stop_spinner.call("no response") unless response_started
+        stop_spinner.call("No response received", :yellow) unless response_started
       end
     end
   end
