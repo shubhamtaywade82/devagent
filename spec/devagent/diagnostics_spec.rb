@@ -21,7 +21,7 @@ RSpec.describe Devagent::Diagnostics do
   let(:context) do
     instance_double(
       Devagent::PluginContext,
-      config: { "model" => "llama2" },
+      config: { "model" => "deepseek-coder:6.7b" },
       plugins: [plugin],
       index: index,
       llm: llm

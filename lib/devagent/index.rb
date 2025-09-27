@@ -11,6 +11,7 @@ module Devagent
       @repo = repo_path
       @cfg = config
       @docs = []
+      @built = false
     end
 
     def build!
@@ -21,6 +22,7 @@ module Devagent
         relative_path = relative_path_for(path)
         { path: relative_path, text: text, tokens: tokenize(text) }
       end.compact
+      @built = true
     end
 
     def document_count
@@ -28,6 +30,7 @@ module Devagent
     end
 
     def retrieve(query, limit: 12)
+      ensure_built!
       query_tokens = tokenize(query)
 
       scored = @docs.map do |doc|
@@ -70,8 +73,27 @@ module Devagent
     end
 
     def format_snippet(doc)
-      head = doc[:text][0, 1200]
-      "#{doc[:path]}:\n#{head}"
+      lines = doc[:text].to_s.lines
+      numbered = lines.each_with_index.map do |line, idx|
+        "%4d | %s" % [idx + 1, line.rstrip]
+      end
+
+      snippet = numbered.take(80).join("\n")
+      if numbered.size > 80
+        snippet << "\n.... | (#{numbered.size - 80} more lines)"
+      end
+
+      trimmed = snippet[0, 1500]
+      trimmed << "\n.... | (truncated)" if snippet.length > 1500
+
+      <<~SNIPPET.strip
+        #{doc[:path]}
+        #{trimmed}
+      SNIPPET
+    end
+
+    def ensure_built!
+      build! unless @built
     end
   end
 end

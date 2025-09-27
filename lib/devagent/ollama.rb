@@ -8,40 +8,55 @@ module Devagent
   class Ollama
     ENDPOINT = URI("http://172.29.128.1:11434/api/generate")
 
-    def self.query(prompt, model:)
-      puts "[Ollama] Prompt: #{prompt[0..200]}..." # truncate for safety
-      response = perform_request(prompt, model)
-      pp response
-      ensure_success!(response)
-      parsed = parse_response(response.body)
-      puts "[Ollama] Response: #{parsed[0..200]}..." # truncate
-      parsed
-    end
+    class << self
+      def query(prompt, model:)
+        log_debug("Prompt", prompt)
+        response = perform_request(prompt, model)
+        log_debug("HTTP Response", response.body)
+        ensure_success!(response)
+        parsed = parse_response(response.body)
+        log_debug("Parsed Response", parsed)
+        parsed
+      end
 
-    def self.perform_request(prompt, model)
-      request = Net::HTTP::Post.new(ENDPOINT, "Content-Type" => "application/json")
-      request.body = { model: model, prompt: prompt, stream: false }.to_json
+      private
 
-      Net::HTTP.start(ENDPOINT.hostname, ENDPOINT.port) do |http|
-        http.read_timeout = 120
-        http.request(request)
+      def perform_request(prompt, model)
+        request = Net::HTTP::Post.new(ENDPOINT, "Content-Type" => "application/json")
+        request.body = { model: model, prompt: prompt, stream: false }.to_json
+
+        Net::HTTP.start(ENDPOINT.hostname, ENDPOINT.port) do |http|
+          http.read_timeout = 120
+          http.request(request)
+        end
+      end
+
+      def ensure_success!(response)
+        return if response.is_a?(Net::HTTPSuccess)
+
+        raise "Ollama request failed (#{response.code}): #{response.body}"
+      end
+
+      def parse_response(body)
+        parsed = JSON.parse(body)
+        parsed.fetch("response")
+      rescue JSON::ParserError
+        raise "Ollama returned invalid JSON"
+      end
+
+      def log_debug(label, data)
+        return unless debug_mode?
+
+        text = data.to_s
+        snippet = text.length > 200 ? "#{text[0, 200]}…" : text
+        $stderr.puts("[Ollama] #{label}: #{snippet}")
+      rescue StandardError
+        nil
+      end
+
+      def debug_mode?
+        ENV.fetch("DEVAGENT_DEBUG_LLM", nil)&.match?(/^(1|true|yes)$/i)
       end
     end
-    private_class_method :perform_request
-
-    def self.ensure_success!(response)
-      return if response.is_a?(Net::HTTPSuccess)
-
-      raise "Ollama request failed (#{response.code}): #{response.body}"
-    end
-    private_class_method :ensure_success!
-
-    def self.parse_response(body)
-      parsed = JSON.parse(body)
-      parsed.fetch("response")
-    rescue JSON::ParserError
-      raise "Ollama returned invalid JSON"
-    end
-    private_class_method :parse_response
   end
 end

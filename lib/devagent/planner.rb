@@ -2,6 +2,7 @@
 
 require "json"
 require "json-schema"
+require_relative "context_hints"
 
 module Devagent
   Plan = Struct.new(:actions, :confidence)
@@ -49,12 +50,21 @@ module Devagent
       - Prefer unified diffs for small changes; use whole_file for large rewrites.
       - For Rails, ensure migrations are reversible; add RSpec when needed.
       - Keep plans minimal and safe.
+      Workflow expectations:
+      - Begin by summarizing repository structure and key files.
+      - Review README/CHANGELOG snippets before proposing code changes.
+      - Produce multi-step plans (>=3 steps when work spans multiple edits) and mark only one step as in progress.
+      - Identify implementation points using the provided survey context (instead of re-scanning) and prefer precise edits.
+      - Generate or update specs when behaviour changes and schedule test runs (e.g., bundle exec rspec).
+      - Call out follow-up actions such as git status or verification steps when appropriate.
+      - Avoid destructive commands unless absolutely necessary; respect potential sandbox limitations.
     SYS
 
     DEFAULT_PLAN = Plan.new([], 0.0).freeze
 
     def self.plan(ctx:, task:)
-      prompt = build_prompt(ctx, task)
+      include_context = Devagent::ContextHints.context_needed?(task)
+      prompt = build_prompt(ctx, task, include_context: include_context)
       json = parse_plan(invoke_llm(ctx, prompt))
       actions = json.fetch("actions", [])
       confidence = json.fetch("confidence", 0.0).to_f
@@ -91,13 +101,16 @@ module Devagent
     end
     private_class_method :parse_plan
 
-    def self.build_prompt(ctx, task)
+    def self.build_prompt(ctx, task, include_context: true)
+      survey_section = include_context ? survey_text(ctx) : ""
+      repo_context = include_context ? safe_retrieve(ctx, task) : ""
+
       <<~PROMPT
         #{preface_text(ctx, task)}
         #{SYSTEM}
 
-        Repository context (truncated):
-        #{safe_retrieve(ctx, task)}
+        #{survey_block(survey_section)}
+        #{context_block(repo_context, include_context)}
 
         Task from user:
         #{task}
@@ -115,5 +128,37 @@ module Devagent
       end.join("\n")
     end
     private_class_method :preface_text
+
+    def self.survey_block(survey_section)
+      return "Repository survey skipped for conversational prompt." if survey_section.to_s.strip.empty?
+
+      <<~SECTION
+        Repository survey:
+        #{survey_section}
+      SECTION
+    end
+    private_class_method :survey_block
+
+    def self.context_block(repo_context, include_context)
+      return "Repository context skipped for conversational prompt." unless include_context
+
+      <<~SECTION
+        Repository context (truncated):
+        #{repo_context}
+      SECTION
+    end
+    private_class_method :context_block
+
+    def self.survey_text(ctx)
+      return "" unless ctx.respond_to?(:survey)
+
+      survey = ctx.survey
+      return "" unless survey
+
+      survey.summary_text
+    rescue StandardError
+      ""
+    end
+    private_class_method :survey_text
   end
 end
