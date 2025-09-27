@@ -30,6 +30,17 @@ RSpec.describe Devagent::CLI do
     expect(diagnostics).to have_received(:run)
   end
 
+  it "invokes the chat session when console command is provided" do
+    session = instance_double(Devagent::Chat::Session, start: nil)
+
+    allow(Devagent::Chat::Session).to receive(:new).and_return(session)
+
+    described_class.start(["console", "--model", "mistral"])
+
+    expect(Devagent::Chat::Session).to have_received(:new).with(model: "mistral", input: $stdin, output: $stdout)
+    expect(session).to have_received(:start)
+  end
+
   it "exits when diagnostics fail" do
     ctx = instance_double(Devagent::PluginContext)
     diagnostics = instance_double(Devagent::Diagnostics, run: false)

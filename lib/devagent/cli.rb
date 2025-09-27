@@ -5,6 +5,7 @@ require "paint"
 require_relative "context"
 require_relative "auto"
 require_relative "diagnostics"
+require_relative "chat/session"
 
 module Devagent
   # CLI exposes Thor commands for launching the agent and running diagnostics.
