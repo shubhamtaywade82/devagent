@@ -49,6 +49,7 @@ module Devagent
             next
           end
 
+          @logger&.info("chat.prompt", text: input)
           stream_with_spinner(input)
         end
 
@@ -115,6 +116,8 @@ module Devagent
             stop_spinner.call("response received")
           end
         )
+        summary = @client.last_response_summary || "(no content)"
+        @logger&.success("chat.response", text: summary)
       rescue Faraday::Error => e
         stop_spinner.call("error")
         @logger&.error("chat.stream", error: e.message)
@@ -123,7 +126,7 @@ module Devagent
         @logger&.error("chat.stream", error: e.message)
         raise
       ensure
-        stop_spinner.call unless response_started
+        stop_spinner.call("no response") unless response_started
       end
     end
   end

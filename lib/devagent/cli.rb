@@ -111,10 +111,15 @@ module Devagent
       end
 
       def build_logger(verbose_flag)
-        return nil unless verbose_flag || ENV.fetch("DEVAGENT_VERBOSE", nil)&.match?(/^(1|true|yes)$/i)
+        level = (verbose_flag || ENV.fetch("DEVAGENT_VERBOSE", nil)&.match?(/^(1|true|yes)$/i)) ? :debug : :info
 
-        @logger ||= TTY::Logger.new(output: $stdout) do |logger|
-          logger.level = :debug
+        if defined?(@logger) && @logger
+          @logger.level = level
+          return @logger
+        end
+
+        @logger = TTY::Logger.new(output: $stdout) do |logger|
+          logger.level = level
         end
       end
     end

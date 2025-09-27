@@ -11,7 +11,7 @@ module Devagent
       DEFAULT_URL = "http://172.29.128.1:11434"
       DEFAULT_SYSTEM_PROMPT = "You are a concise, helpful assistant designed for a terminal environment."
 
-      attr_reader :model, :history, :system_prompt
+      attr_reader :model, :history, :system_prompt, :last_response_summary
 
       def initialize(model:, system_prompt: ENV.fetch("DEVAGENT_CHAT_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT), base_url: DEFAULT_URL, logger: nil)
         @model = model
@@ -57,6 +57,8 @@ module Devagent
         end
 
         append_assistant_message
+        @last_response_summary = summarized_response
+        log_info("chat.response", text: @last_response_summary)
         output.puts
       rescue Faraday::Error => e
         output.puts Paint["Error communicating with Ollama: #{e.message}", :red]
@@ -101,6 +103,7 @@ module Devagent
         @json_buffer = String.new
         @assistant_response_content = String.new
         @response_started = false
+        @last_response_summary = nil
       end
 
       def stream_chat_endpoint(output, color)
@@ -166,8 +169,11 @@ module Devagent
           return
         end
 
-        body.split("\n").each do |line|
-          next if line.strip.empty?
+        body.split("\n").each do |raw_line|
+          next if raw_line.strip.empty?
+
+          line = normalize_line(raw_line)
+          next if line.nil?
 
           data = safe_parse_json(line)
           next unless data
@@ -180,6 +186,7 @@ module Devagent
           @assistant_response_content << content
           output.print(Paint[content, color])
           output.flush if output.respond_to?(:flush)
+          log_info("chat.chunk", text: content)
         end
 
         response_started!
@@ -192,18 +199,30 @@ module Devagent
         nil
       end
 
+      def normalize_line(line)
+        stripped = line.sub(/\Adata:\s*/, "")
+        stripped = stripped.sub(/\Aevent:\s*\w+\s*/, "")
+        stripped = stripped.strip
+        return nil if stripped.empty? || stripped == "[DONE]"
+
+        stripped
+      end
+
       def process_chunk(chunk, output, color)
         @json_buffer << chunk
         lines = @json_buffer.split("\n")
         @json_buffer = lines.pop || String.new
 
-        lines.each do |line|
-          next if line.strip.empty?
+        lines.each do |raw_line|
+          next if raw_line.strip.empty?
+
+          line = normalize_line(raw_line)
+          next if line.nil?
 
           begin
             data = JSON.parse(line)
           rescue JSON::ParserError
-            @json_buffer.prepend(line)
+            @json_buffer.prepend("#{raw_line}\n")
             next
           end
 
@@ -215,16 +234,13 @@ module Devagent
             next
           end
 
-          content = if data["message"] && data["message"]["content"]
-                      data["message"]["content"]
-                    elsif data["response"]
-                      data["response"]
-                    end
+          content = extract_content(data)
 
           if content
             @assistant_response_content << content
             output.print(Paint[content, color])
             output.flush if output.respond_to?(:flush)
+            log_info("chat.chunk", text: content)
           end
 
           next unless data["done"]
@@ -245,6 +261,31 @@ module Devagent
         @on_response_start&.call
       end
 
+      def extract_content(data)
+        if data["message"]
+          interpret_message_content(data["message"]["content"])
+        elsif data["response"]
+          data["response"].to_s
+        end
+      end
+
+      def interpret_message_content(content)
+        case content
+        when String
+          content
+        when Array
+          content.map do |part|
+            if part.is_a?(Hash)
+              part["text"] || part["content"] || part.values_at("value", "data").compact.join
+            else
+              part.to_s
+            end
+          end.join
+        when Hash
+          content["text"] || content["content"] || content.values.compact.join
+        end
+      end
+
       def log_debug(event, payload = {})
         @logger&.debug(event, **payload)
       end
@@ -253,11 +294,20 @@ module Devagent
         @logger&.warn(event, **payload)
       end
 
+      def log_info(event, payload = {})
+        @logger&.info(event, **payload)
+      end
+
       def response_status(error)
         response = error.response
         return nil unless response
 
         response[:status] || response["status"]
+      end
+
+      def summarized_response
+        summary = @assistant_response_content.strip
+        summary.empty? ? "(no content)" : summary
       end
     end
   end
