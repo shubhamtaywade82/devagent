@@ -23,7 +23,7 @@ module Devagent
     desc "console", "Start an interactive chat console session with Ollama"
     method_option :model,
                   aliases: "-m",
-                  default: "llama2",
+                  default: "deepseek-coder:6.7b",
                   desc: "The model to use (must be available in Ollama)"
     def console
       say Paint["Starting interactive session with Ollama (model: #{options[:model]})", :yellow]

@@ -18,8 +18,8 @@ module Devagent
         @system_prompt = system_prompt
         @base_url = base_url
         @history = []
-        @json_buffer = ""
-        @assistant_response_content = ""
+        @json_buffer = String.new
+        @assistant_response_content = String.new
         @conn = build_connection
         seed_system_prompt
       end
@@ -41,16 +41,13 @@ module Devagent
         append_user_message(prompt)
         reset_stream_state
 
-        @conn.post("/api/chat") do |req|
-          req.headers["Content-Type"] = "application/json"
-          req.body = JSON.generate(
-            model: @model,
-            messages: build_messages,
-            stream: true
-          )
-          req.options.on_data = proc do |chunk, _size|
-            process_chunk(chunk, output, color)
-          end
+        begin
+          stream_chat_endpoint(output, color)
+        rescue Faraday::ClientError => e
+          raise unless legacy_chat_error?(e)
+
+          reset_stream_state
+          stream_legacy_endpoint(output, color)
         end
 
         append_assistant_message
@@ -93,14 +90,95 @@ module Devagent
       end
 
       def reset_stream_state
-        @json_buffer = ""
-        @assistant_response_content = ""
+        @json_buffer = String.new
+        @assistant_response_content = String.new
+      end
+
+      def stream_chat_endpoint(output, color)
+        @conn.post("/api/chat") do |req|
+          req.headers["Content-Type"] = "application/json"
+          req.body = JSON.generate(
+            model: @model,
+            messages: build_messages,
+            stream: true
+          )
+          req.options.on_data = proc do |chunk, _size|
+            process_chunk(chunk, output, color)
+          end
+        end
+      end
+
+      def stream_legacy_endpoint(output, color)
+        response = @conn.post("/api/generate") do |req|
+          req.headers["Content-Type"] = "application/json"
+          req.body = JSON.generate(
+            model: @model,
+            prompt: build_legacy_prompt,
+            stream: true
+          )
+          req.options.on_data = proc do |chunk, _size|
+            process_chunk(chunk, output, color)
+          end
+        end
+
+        handle_legacy_completion(response, output, color)
+      end
+
+      def legacy_chat_error?(error)
+        response = error.response
+        return false unless response
+
+        status = response[:status] || response["status"]
+        [404, 405].include?(status.to_i)
+      end
+
+      def build_legacy_prompt
+        segments = @history.map do |message|
+          role = case message[:role]
+                 when "system" then "System"
+                 when "user" then "User"
+                 when "assistant" then "Assistant"
+                 else message[:role].to_s.capitalize
+                 end
+
+          content = message[:content].to_s
+          content.empty? ? role : "#{role}: #{content}"
+        end
+
+        segments << "Assistant:"
+        segments.join("\n\n")
+      end
+
+      def handle_legacy_completion(response, output, color)
+        return unless response&.body
+
+        response.body.split("\n").each do |line|
+          next if line.strip.empty?
+
+          data = safe_parse_json(line)
+          next unless data
+
+          content = data["response"]
+          next unless content
+
+          @assistant_response_content << content
+          output.print(Paint[content, color])
+          output.flush if output.respond_to?(:flush)
+        end
+
+        nil
+      end
+
+      def safe_parse_json(line)
+        JSON.parse(line)
+      rescue JSON::ParserError
+        nil
       end
 
       def process_chunk(chunk, output, color)
         @json_buffer << chunk
         lines = @json_buffer.split("\n")
-        @json_buffer = lines.pop || ""
+        @json_buffer = lines.pop || String.new
 
         lines.each do |line|
           next if line.strip.empty?
@@ -118,8 +196,13 @@ module Devagent
             next
           end
 
-          if data["message"] && data["message"]["content"]
-            content = data["message"]["content"]
+          content = if data["message"] && data["message"]["content"]
+                      data["message"]["content"]
+                    elsif data["response"]
+                      data["response"]
+                    end
+
+          if content
             @assistant_response_content << content
             output.print(Paint[content, color])
             output.flush if output.respond_to?(:flush)
