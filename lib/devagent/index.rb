@@ -70,8 +70,23 @@ module Devagent
     end
 
     def format_snippet(doc)
-      head = doc[:text][0, 1200]
-      "#{doc[:path]}:\n#{head}"
+      lines = doc[:text].to_s.lines
+      numbered = lines.each_with_index.map do |line, idx|
+        "%4d | %s" % [idx + 1, line.rstrip]
+      end
+
+      snippet = numbered.take(80).join("\n")
+      if numbered.size > 80
+        snippet << "\n.... | (#{numbered.size - 80} more lines)"
+      end
+
+      trimmed = snippet[0, 1500]
+      trimmed << "\n.... | (truncated)" if snippet.length > 1500
+
+      <<~SNIPPET.strip
+        #{doc[:path]}
+        #{trimmed}
+      SNIPPET
     end
   end
 end

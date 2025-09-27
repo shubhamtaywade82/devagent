@@ -40,8 +40,8 @@ module Devagent
         raise Faraday::ConnectionFailed, "Unable to connect to Ollama server at #{@base_url}"
       end
 
-      def chat_stream(prompt, output: $stdout, color: :cyan, on_response_start: nil)
-        append_user_message(prompt)
+      def chat_stream(prompt, output: $stdout, color: :cyan, on_response_start: nil, context_chunks: [])
+        append_user_message(prompt, context_chunks)
         reset_stream_state
         @on_response_start = on_response_start
 
@@ -87,8 +87,8 @@ module Devagent
         @history << { role: "system", content: @system_prompt }
       end
 
-      def append_user_message(prompt)
-        @history << { role: "user", content: prompt }
+      def append_user_message(prompt, context_chunks)
+        @history << { role: "user", content: build_user_message(prompt, context_chunks) }
       end
 
       def append_assistant_message
@@ -347,6 +347,37 @@ module Devagent
           content["text"] || content["content"] || content["value"] || content["data"] ||
             content.values.select { |value| value.is_a?(String) }.join
         end
+      end
+
+      def build_user_message(prompt, context_chunks)
+        return prompt if context_chunks.nil? || context_chunks.empty?
+
+        <<~MSG.strip
+          Repository context:
+          #{format_context_chunks(context_chunks)}
+
+          User request:
+          #{prompt}
+        MSG
+      end
+
+      def format_context_chunks(chunks)
+        chunks.map do |chunk|
+          chunk = chunk.strip
+          next if chunk.empty?
+
+          path, body = chunk.split("\n", 2)
+          body = body.to_s
+
+          formatted_body = body.strip.empty? ? "(file empty or binary)" : body
+
+          <<~SECTION.strip
+            File: #{path}
+            ```
+            #{formatted_body}
+            ```
+          SECTION
+        end.compact.join("\n\n")
       end
 
       def log_debug(event, payload = {})

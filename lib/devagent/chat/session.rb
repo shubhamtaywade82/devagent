@@ -9,10 +9,11 @@ module Devagent
   module Chat
     # Session implements the interactive console loop for chatting with Ollama.
     class Session
-      def initialize(model:, input: $stdin, output: $stdout, logger: nil)
+      def initialize(model:, input: $stdin, output: $stdout, logger: nil, context: nil)
         @input = input
         @output = output
         @logger = logger
+        @context = context
         @client = Client.new(model: model, logger: logger)
       end
 
@@ -94,6 +95,9 @@ module Devagent
       end
 
       def stream_with_spinner(input)
+        context_snippets = gather_context(input)
+        announce_context(context_snippets)
+
         spinner = TTY::Spinner.new("[:spinner] Thinking...", format: :dots, output: @output, clear: true)
         spinner_stopped = false
         stop_spinner = lambda do |message = nil, color = :yellow|
@@ -112,6 +116,7 @@ module Devagent
         @client.chat_stream(
           input,
           output: @output,
+          context_chunks: context_snippets,
           on_response_start: lambda do
             response_started = true
             stop_spinner.call
@@ -128,6 +133,30 @@ module Devagent
         raise
       ensure
         stop_spinner.call("No response received", :yellow) unless response_started
+      end
+
+      def gather_context(user_input)
+        return [] unless @context&.respond_to?(:index)
+
+        index = @context.index
+        return [] unless index.respond_to?(:retrieve)
+
+        Array(index.retrieve(user_input, limit: 6)).map { |entry| entry.to_s.strip }.reject(&:empty?)
+      rescue StandardError => e
+        @logger&.warn("chat.context", error: e.message)
+        []
+      end
+
+      def announce_context(snippets)
+        return if snippets.empty?
+
+        paths = context_paths(snippets)
+        @logger&.info("chat.context", files: paths) if @logger
+        @output.puts Paint["Context: #{paths.join(', ')}", :cyan]
+      end
+
+      def context_paths(snippets)
+        snippets.map { |snippet| snippet.lines.first.to_s.strip }.reject(&:empty?).uniq
       end
     end
   end

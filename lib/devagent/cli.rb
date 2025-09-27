@@ -52,11 +52,14 @@ module Devagent
         title: { top_left: "Devagent" }
       )
 
+      ctx = load_context
+
       session = Chat::Session.new(
         model: model,
         input: $stdin,
         output: $stdout,
-        logger: build_logger(options[:verbose])
+        logger: build_logger(options[:verbose]),
+        context: ctx
       )
       session.start
     end
@@ -122,6 +125,16 @@ module Devagent
         @logger = TTY::Logger.new(output: $stdout) do |logger|
           logger.level = :debug
         end
+      end
+
+      def load_context
+        ctx = Context.build(Dir.pwd)
+        ctx.index.build!
+        say Paint["Indexed #{ctx.index.document_count} files for context-aware responses.", :cyan]
+        ctx
+      rescue StandardError => e
+        say Paint["Warning: Unable to build repository context (#{e.message}).", :yellow]
+        nil
       end
     end
   end
