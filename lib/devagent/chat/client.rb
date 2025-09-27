@@ -8,7 +8,7 @@ module Devagent
   module Chat
     # Client encapsulates streaming chat interactions with the local Ollama server.
     class Client
-      DEFAULT_URL = "http://localhost:11434"
+      DEFAULT_URL = "http://172.29.128.1:11434"
       DEFAULT_SYSTEM_PROMPT = "You are a concise, helpful assistant designed for a terminal environment."
 
       attr_reader :model, :history, :system_prompt
