@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "tty-reader"
+require "tty-box"
+require "tty-spinner"
 require_relative "planner"
 require_relative "executor"
 
@@ -43,7 +45,7 @@ module Devagent
     attr_reader :context, :input, :output
 
     def greet
-      output.puts("Devagent autonomous REPL. Type 'exit' to quit.")
+      output.puts(greeting_banner)
     end
 
     def farewell
@@ -56,13 +58,13 @@ module Devagent
     end
 
     def run(task)
-      plan = Planner.plan(ctx: @context, task: task)
+      plan = with_spinner("Planning") { Planner.plan(ctx: @context, task: task) }
       output.puts("Planning confidence: #{plan.confidence.round(2)}")
 
       if plan.actions.empty?
         # Instead of stopping, fall back to Q&A
         output.puts("No actions planned. Asking model directly...")
-        answer = @context.llm.call(task)
+        answer = with_spinner("Consulting model") { @context.llm.call(task) }
         output.puts(answer)
         return
       end
@@ -74,14 +76,18 @@ module Devagent
     def iterate(task, plan)
       (1..@max_iter).each do |i|
         output.puts("Iteration #{i}/#{@max_iter}")
-        @executor.apply(plan.actions)
+        with_spinner("Applying actions") { @executor.apply(plan.actions) }
         @executor.log.each { |line| output.puts("  -> #{line}") }
 
         @context.plugins.each { |p| p.on_post_edit(@context, @executor.log.join("\n")) if p.respond_to?(:on_post_edit) }
 
         # Only run tests if we actually changed code (or asked to generate tests)
         changed_code = @executor.changes_made?
-        status = changed_code ? run_tests : :skipped
+        status = if changed_code
+                   with_spinner("Running tests") { run_tests }
+                 else
+                   :skipped
+                 end
 
         case status
         when :green
@@ -153,9 +159,51 @@ module Devagent
       Previous attempt had failures. Use this feedback to fix:
       #{feedback}
       P
-      raw = @context.llm.call(preface + "\nTask:\n" + task + "\nReturn JSON only.")
+      raw = with_spinner("Replanning") do
+        @context.llm.call(preface + "\nTask:\n" + task + "\nReturn JSON only.")
+      end
       json = JSON.parse(raw) rescue {"confidence" => 0.0, "actions" => []}
       Plan.new(json["actions"] || [], (json["confidence"] || 0.0).to_f)
+    end
+
+    def with_spinner(message)
+      spinner = TTY::Spinner.new(
+        "[:spinner] #{message}...",
+        format: :dots,
+        output: output,
+        clear: true
+      )
+      spinner.auto_spin
+      yield
+    ensure
+      spinner&.stop
+    end
+
+    def greeting_banner
+      lines = ["Devagent autonomous REPL. Type 'exit' to quit."]
+      lines.concat(survey_summary_lines)
+
+      TTY::Box.frame(
+        lines.join("\n"),
+        align: :left,
+        padding: [1, 2],
+        title: { top_left: "Devagent" }
+      )
+    end
+
+    def survey_summary_lines
+      survey = context.respond_to?(:survey) ? context.survey : nil
+      return [] unless survey
+
+      lines = []
+      lines << "Structure: #{survey.structure_lines.join(', ')}" if survey.structure_lines.any?
+      lines << "Key files: #{survey.key_file_lines.join(', ')}" if survey.key_file_lines.any?
+      if survey.doc_previews.any?
+        doc_list = survey.doc_previews.keys.join(', ')
+        lines << "Docs: #{doc_list}"
+      end
+
+      lines
     end
   end
 end

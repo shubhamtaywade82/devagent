@@ -31,13 +31,26 @@ RSpec.describe Devagent::CLI do
   end
 
   it "invokes the chat session when console command is provided" do
+    ctx = instance_double(
+      Devagent::PluginContext,
+      index: instance_double(Devagent::Index, build!: nil, document_count: 12)
+    )
     session = instance_double(Devagent::Chat::Session, start: nil)
+    prompt = instance_double(TTY::Prompt, input: instance_double(StringIO, tty?: false))
 
+    allow(TTY::Prompt).to receive(:new).and_return(prompt)
+    allow(Devagent::Context).to receive(:build).and_return(ctx)
     allow(Devagent::Chat::Session).to receive(:new).and_return(session)
 
     described_class.start(["console", "--model", "mistral"])
 
-    expect(Devagent::Chat::Session).to have_received(:new).with(model: "mistral", input: $stdin, output: $stdout)
+    expect(Devagent::Chat::Session).to have_received(:new).with(
+      model: "mistral",
+      input: $stdin,
+      output: $stdout,
+      logger: nil,
+      context: ctx
+    )
     expect(session).to have_received(:start)
   end
 

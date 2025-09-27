@@ -49,6 +49,14 @@ module Devagent
       - Prefer unified diffs for small changes; use whole_file for large rewrites.
       - For Rails, ensure migrations are reversible; add RSpec when needed.
       - Keep plans minimal and safe.
+      Workflow expectations:
+      - Begin by summarizing repository structure and key files.
+      - Review README/CHANGELOG snippets before proposing code changes.
+      - Produce multi-step plans (>=3 steps when work spans multiple edits) and mark only one step as in progress.
+      - Identify implementation points using the provided survey context (instead of re-scanning) and prefer precise edits.
+      - Generate or update specs when behaviour changes and schedule test runs (e.g., bundle exec rspec).
+      - Call out follow-up actions such as git status or verification steps when appropriate.
+      - Avoid destructive commands unless absolutely necessary; respect potential sandbox limitations.
     SYS
 
     DEFAULT_PLAN = Plan.new([], 0.0).freeze
@@ -96,6 +104,9 @@ module Devagent
         #{preface_text(ctx, task)}
         #{SYSTEM}
 
+        Repository survey:
+        #{survey_text(ctx)}
+
         Repository context (truncated):
         #{safe_retrieve(ctx, task)}
 
@@ -115,5 +126,17 @@ module Devagent
       end.join("\n")
     end
     private_class_method :preface_text
+
+    def self.survey_text(ctx)
+      return "" unless ctx.respond_to?(:survey)
+
+      survey = ctx.survey
+      return "" unless survey
+
+      survey.summary_text
+    rescue StandardError
+      ""
+    end
+    private_class_method :survey_text
   end
 end

@@ -6,9 +6,10 @@ require_relative "index"
 require_relative "memory"
 require_relative "ollama"
 require_relative "util"
+require_relative "repo_survey"
 
 module Devagent
-  PluginContext = Struct.new(:repo_path, :config, :llm, :shell, :index, :memory, :plugins)
+  PluginContext = Struct.new(:repo_path, :config, :llm, :shell, :index, :memory, :plugins, :survey)
 
   # Context builds the dependencies (LLM, shell, index, plugins) for the agent.
   module Context
@@ -31,10 +32,10 @@ module Devagent
       shell = build_shell(repo_path)
       index = Index.new(repo_path, config["index"])
       memory = Memory.new(repo_path)
-      plugins = PluginLoader.load_plugins(
-        PluginContext.new(repo_path, config, llm, shell, index, memory, [])
-      )
-      PluginContext.new(repo_path, config, llm, shell, index, memory, plugins)
+      base_ctx = PluginContext.new(repo_path, config, llm, shell, index, memory, [], nil)
+      plugins = PluginLoader.load_plugins(base_ctx)
+      survey = RepoSurvey.new(repo_path).capture!
+      PluginContext.new(repo_path, config, llm, shell, index, memory, plugins, survey)
     end
 
     def self.config_for(repo_path)
