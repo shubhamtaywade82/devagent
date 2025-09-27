@@ -2,15 +2,18 @@
 
 require "paint"
 require "faraday"
+require "tty-spinner"
+require "tty-table"
 
 module Devagent
   module Chat
     # Session implements the interactive console loop for chatting with Ollama.
     class Session
-      def initialize(model:, input: $stdin, output: $stdout)
+      def initialize(model:, input: $stdin, output: $stdout, logger: nil)
         @input = input
         @output = output
-        @client = Client.new(model: model)
+        @logger = logger
+        @client = Client.new(model: model, logger: logger)
       end
 
       def start
@@ -46,7 +49,7 @@ module Devagent
             next
           end
 
-          @client.chat_stream(input, output: @output)
+          stream_with_spinner(input)
         end
 
         @output.puts Paint["Goodbye!", :yellow]
@@ -72,15 +75,11 @@ module Devagent
 
       def display_history
         @output.puts Paint["Conversation history:", :yellow]
-        @client.history.each do |message|
-          label = message[:role].capitalize.ljust(9)
-          color = case message[:role]
-                  when "user" then :green
-                  when "assistant" then :cyan
-                  else :yellow
-                  end
-          @output.puts Paint["#{label}: #{message[:content]}", color]
+        rows = @client.history.map do |message|
+          [message[:role].capitalize, message[:content]]
         end
+        table = TTY::Table.new(%w[Role Content], rows)
+        @output.puts(table.render(:ascii, multiline: true, padding: [0, 1]))
       end
 
       def switch_model(new_model)
@@ -91,6 +90,40 @@ module Devagent
 
         @client.switch_model!(new_model)
         @output.puts Paint["Switched to model #{new_model}. Note: existing conversation history will still be sent to the new model.", :yellow]
+      end
+
+      def stream_with_spinner(input)
+        spinner = TTY::Spinner.new("[:spinner] Thinking...", format: :dots, output: @output)
+        spinner_stopped = false
+        stop_spinner = lambda do |message = "done"|
+          next if spinner_stopped
+
+          spinner.stop(" #{message}")
+          spinner_stopped = true
+        rescue StandardError
+          spinner_stopped = true
+        end
+
+        response_started = false
+        spinner.auto_spin
+
+        @client.chat_stream(
+          input,
+          output: @output,
+          on_response_start: lambda do
+            response_started = true
+            stop_spinner.call("response received")
+          end
+        )
+      rescue Faraday::Error => e
+        stop_spinner.call("error")
+        @logger&.error("chat.stream", error: e.message)
+      rescue StandardError => e
+        stop_spinner.call("error")
+        @logger&.error("chat.stream", error: e.message)
+        raise
+      ensure
+        stop_spinner.call unless response_started
       end
     end
   end

@@ -13,13 +13,16 @@ module Devagent
 
       attr_reader :model, :history, :system_prompt
 
-      def initialize(model:, system_prompt: ENV.fetch("DEVAGENT_CHAT_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT), base_url: DEFAULT_URL)
+      def initialize(model:, system_prompt: ENV.fetch("DEVAGENT_CHAT_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT), base_url: DEFAULT_URL, logger: nil)
         @model = model
         @system_prompt = system_prompt
         @base_url = base_url
         @history = []
         @json_buffer = String.new
         @assistant_response_content = String.new
+        @logger = logger
+        @on_response_start = nil
+        @response_started = false
         @conn = build_connection
         seed_system_prompt
       end
@@ -37,15 +40,18 @@ module Devagent
         raise Faraday::ConnectionFailed, "Unable to connect to Ollama server at #{@base_url}"
       end
 
-      def chat_stream(prompt, output: $stdout, color: :cyan)
+      def chat_stream(prompt, output: $stdout, color: :cyan, on_response_start: nil)
         append_user_message(prompt)
         reset_stream_state
+        @on_response_start = on_response_start
 
         begin
+          log_debug("chat.stream", endpoint: "/api/chat", model: @model)
           stream_chat_endpoint(output, color)
         rescue Faraday::ClientError => e
           raise unless legacy_chat_error?(e)
 
+          log_warn("chat.stream.fallback", endpoint: "/api/chat", status: response_status(e), message: e.message)
           reset_stream_state
           stream_legacy_endpoint(output, color)
         end
@@ -54,6 +60,8 @@ module Devagent
         output.puts
       rescue Faraday::Error => e
         output.puts Paint["Error communicating with Ollama: #{e.message}", :red]
+      ensure
+        @on_response_start = nil
       end
 
       def switch_model!(new_model)
@@ -92,6 +100,7 @@ module Devagent
       def reset_stream_state
         @json_buffer = String.new
         @assistant_response_content = String.new
+        @response_started = false
       end
 
       def stream_chat_endpoint(output, color)
@@ -109,6 +118,7 @@ module Devagent
       end
 
       def stream_legacy_endpoint(output, color)
+        log_debug("chat.stream", endpoint: "/api/generate", model: @model)
         response = @conn.post("/api/generate") do |req|
           req.headers["Content-Type"] = "application/json"
           req.body = JSON.generate(
@@ -150,13 +160,19 @@ module Devagent
       end
 
       def handle_legacy_completion(response, output, color)
-        return unless response&.body
+        body = response&.body
+        unless body
+          response_started!
+          return
+        end
 
-        response.body.split("\n").each do |line|
+        body.split("\n").each do |line|
           next if line.strip.empty?
 
           data = safe_parse_json(line)
           next unless data
+
+          response_started!
 
           content = data["response"]
           next unless content
@@ -166,6 +182,7 @@ module Devagent
           output.flush if output.respond_to?(:flush)
         end
 
+        response_started!
         nil
       end
 
@@ -189,6 +206,8 @@ module Devagent
             @json_buffer.prepend(line)
             next
           end
+
+          response_started!
 
           if data["error"]
             output.print(Paint["\nError: #{data["error"]}\n", :red])
@@ -217,6 +236,28 @@ module Devagent
             output.flush if output.respond_to?(:flush)
           end
         end
+      end
+
+      def response_started!
+        return if @response_started
+
+        @response_started = true
+        @on_response_start&.call
+      end
+
+      def log_debug(event, payload = {})
+        @logger&.debug(event, **payload)
+      end
+
+      def log_warn(event, payload = {})
+        @logger&.warn(event, **payload)
+      end
+
+      def response_status(error)
+        response = error.response
+        return nil unless response
+
+        response[:status] || response["status"]
       end
     end
   end
