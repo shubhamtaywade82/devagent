@@ -23,7 +23,6 @@ module Devagent
 
       # build index once, allow plugins to tune it
       context.plugins.each { |p| p.on_index(context) if p.respond_to?(:on_index) }
-      context.index.build!
     end
 
     def repl

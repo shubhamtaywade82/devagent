@@ -11,6 +11,7 @@ module Devagent
       @repo = repo_path
       @cfg = config
       @docs = []
+      @built = false
     end
 
     def build!
@@ -21,6 +22,7 @@ module Devagent
         relative_path = relative_path_for(path)
         { path: relative_path, text: text, tokens: tokenize(text) }
       end.compact
+      @built = true
     end
 
     def document_count
@@ -28,6 +30,7 @@ module Devagent
     end
 
     def retrieve(query, limit: 12)
+      ensure_built!
       query_tokens = tokenize(query)
 
       scored = @docs.map do |doc|
@@ -87,6 +90,10 @@ module Devagent
         #{doc[:path]}
         #{trimmed}
       SNIPPET
+    end
+
+    def ensure_built!
+      build! unless @built
     end
   end
 end

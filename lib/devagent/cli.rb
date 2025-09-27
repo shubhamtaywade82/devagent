@@ -129,8 +129,6 @@ module Devagent
 
       def load_context
         ctx = Context.build(Dir.pwd)
-        ctx.index.build!
-        say Paint["Indexed #{ctx.index.document_count} files for context-aware responses.", :cyan]
         ctx
       rescue StandardError => e
         say Paint["Warning: Unable to build repository context (#{e.message}).", :yellow]

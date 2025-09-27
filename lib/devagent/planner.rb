@@ -2,6 +2,7 @@
 
 require "json"
 require "json-schema"
+require_relative "context_hints"
 
 module Devagent
   Plan = Struct.new(:actions, :confidence)
@@ -62,7 +63,8 @@ module Devagent
     DEFAULT_PLAN = Plan.new([], 0.0).freeze
 
     def self.plan(ctx:, task:)
-      prompt = build_prompt(ctx, task)
+      include_context = Devagent::ContextHints.context_needed?(task)
+      prompt = build_prompt(ctx, task, include_context: include_context)
       json = parse_plan(invoke_llm(ctx, prompt))
       actions = json.fetch("actions", [])
       confidence = json.fetch("confidence", 0.0).to_f
@@ -99,16 +101,16 @@ module Devagent
     end
     private_class_method :parse_plan
 
-    def self.build_prompt(ctx, task)
+    def self.build_prompt(ctx, task, include_context: true)
+      survey_section = include_context ? survey_text(ctx) : ""
+      repo_context = include_context ? safe_retrieve(ctx, task) : ""
+
       <<~PROMPT
         #{preface_text(ctx, task)}
         #{SYSTEM}
 
-        Repository survey:
-        #{survey_text(ctx)}
-
-        Repository context (truncated):
-        #{safe_retrieve(ctx, task)}
+        #{survey_block(survey_section)}
+        #{context_block(repo_context, include_context)}
 
         Task from user:
         #{task}
@@ -126,6 +128,26 @@ module Devagent
       end.join("\n")
     end
     private_class_method :preface_text
+
+    def self.survey_block(survey_section)
+      return "Repository survey skipped for conversational prompt." if survey_section.to_s.strip.empty?
+
+      <<~SECTION
+        Repository survey:
+        #{survey_section}
+      SECTION
+    end
+    private_class_method :survey_block
+
+    def self.context_block(repo_context, include_context)
+      return "Repository context skipped for conversational prompt." unless include_context
+
+      <<~SECTION
+        Repository context (truncated):
+        #{repo_context}
+      SECTION
+    end
+    private_class_method :context_block
 
     def self.survey_text(ctx)
       return "" unless ctx.respond_to?(:survey)

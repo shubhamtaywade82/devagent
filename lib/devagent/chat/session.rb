@@ -4,6 +4,7 @@ require "paint"
 require "faraday"
 require "tty-spinner"
 require "tty-table"
+require_relative "../context_hints"
 
 module Devagent
   module Chat
@@ -136,6 +137,7 @@ module Devagent
       end
 
       def gather_context(user_input)
+        return [] unless Devagent::ContextHints.context_needed?(user_input)
         return [] unless @context&.respond_to?(:index)
 
         index = @context.index

@@ -5,11 +5,13 @@ auto:
   require_tests_green: true
   confirmation_threshold: 0.7
   allowlist:
+    - "**/*"
     - "lib/**"
     - "spec/**"
     - "sig/**"
     - "bin/**"
     - "exe/**"
+    - "**.md"
   denylist:
     - ".git/**"
     - "node_modules/**"

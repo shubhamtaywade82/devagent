@@ -19,6 +19,10 @@ RSpec.describe Devagent::Planner do
     Devagent::PluginContext.new(repo_path, config, llm, shell, index, memory, [], survey)
   end
 
+  before do
+    allow(Devagent::ContextHints).to receive(:context_needed?).and_return(true)
+  end
+
   it "embeds the repository survey and workflow expectations in the prompt" do
     captured_prompt = nil
     allow(llm).to receive(:call) do |prompt, **|
@@ -31,5 +35,21 @@ RSpec.describe Devagent::Planner do
     expect(captured_prompt).to include("Repository survey:")
     expect(captured_prompt).to include("Directories: lib/ (library runtime code)")
     expect(captured_prompt).to include("Workflow expectations")
+  end
+
+  it "skips repository context for conversational prompts" do
+    allow(Devagent::ContextHints).to receive(:context_needed?).and_return(false)
+    expect(index).not_to receive(:retrieve)
+
+    captured_prompt = nil
+    allow(llm).to receive(:call) do |prompt, **|
+      captured_prompt = prompt
+      { confidence: 0.1, actions: [] }.to_json
+    end
+
+    described_class.plan(ctx: ctx, task: "hi")
+
+    expect(captured_prompt).to include("Repository survey skipped")
+    expect(captured_prompt).to include("Repository context skipped")
   end
 end
