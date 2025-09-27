@@ -41,7 +41,9 @@ Gem::Specification.new do |spec|
 
   # === Runtime dependencies (keep light) ===
   spec.add_dependency "diffy", "~> 3.4"
+  spec.add_dependency "faraday", "~> 2.9"
   spec.add_dependency "json-schema", "~> 4.3"
+  spec.add_dependency "paint", "~> 2.2"
   spec.add_dependency "parallel", "~> 1.24"
   spec.add_dependency "thor", "~> 1.3"
   spec.add_dependency "tty-reader", "~> 0.9"

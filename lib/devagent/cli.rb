@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "thor"
+require "paint"
 require_relative "context"
 require_relative "auto"
 require_relative "diagnostics"
@@ -16,6 +17,17 @@ module Devagent
     def start
       ctx = Context.build(Dir.pwd)
       Auto.new(ctx, input: $stdin, output: $stdout).repl
+    end
+
+    desc "console", "Start an interactive chat console session with Ollama"
+    method_option :model,
+                  aliases: "-m",
+                  default: "llama2",
+                  desc: "The model to use (must be available in Ollama)"
+    def console
+      say Paint["Starting interactive session with Ollama (model: #{options[:model]})", :yellow]
+      session = Chat::Session.new(model: options[:model], input: $stdin, output: $stdout)
+      session.start
     end
 
     desc "test", "Run diagnostics to verify configuration and Ollama connectivity"
