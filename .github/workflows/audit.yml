@@ -6,10 +6,11 @@ on:
 
 jobs:
   audit:
-    runs-on: ubuntu-latest
     strategy:
       matrix:
         provider: [openai, ollama]
+    if: ${{ matrix.provider != 'openai' || secrets.OPENAI_API_KEY != '' }}
+    runs-on: ubuntu-latest
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
@@ -37,8 +38,8 @@ jobs:
         if: matrix.provider == 'openai'
         run: |
           if [ -z "${OPENAI_API_KEY}" ]; then
-            echo "OPENAI_API_KEY missing"
-            exit 1
+            echo "::warning::OPENAI_API_KEY missing – skipping OpenAI provider job"
+            exit 0
           else
             echo "OPENAI_API_KEY detected"
           fi
