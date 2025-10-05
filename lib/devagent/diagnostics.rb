@@ -13,9 +13,21 @@ module Devagent
 
       results = [
         check("configuration") { check_configuration },
-        check("index build") { check_index },
-        check("ollama connectivity") { check_ollama }
+        check("index build") { check_index }
       ]
+
+      connectivity_checks.each do |check_info|
+        results << check(check_info[:label]) do
+          case check_info[:provider]
+          when "openai"
+            check_openai(check_info[:role])
+          when "ollama"
+            check_ollama(check_info[:role])
+          else
+            "skipped"
+          end
+        end
+      end
 
       success = results.all?
       output.puts(success ? "All checks passed." : "Some checks failed.")
@@ -50,12 +62,12 @@ module Devagent
       "indexed chunks: #{index.document_count}"
     end
 
-    def check_ollama
-      response = context.chat("Respond with the single word READY.")
-      text = response.to_s.strip
-      raise "Unexpected response from Ollama: #{response.inspect}" unless text.downcase.include?("ready")
+    def check_ollama(role = :default)
+      check_ready(role, "Ollama")
+    end
 
-      "response: #{text}"
+    def check_openai(role = :default)
+      check_ready(role, "OpenAI")
     end
 
     def check_repo
@@ -76,6 +88,32 @@ module Devagent
     def plugin_summary
       names = Array(context.plugins).map { |plugin| plugin.name.to_s.split("::").last }.reject(&:empty?)
       names.empty? ? "no plugins detected" : "plugins: #{names.join(", ")}"
+    end
+
+    def connectivity_checks
+      return [] unless context.respond_to?(:provider)
+
+      roles = %i[default planner]
+      seen = {}
+
+      roles.filter_map do |role|
+        provider = context.provider(role)
+        next if provider.nil? || seen[provider]
+
+        seen[provider] = true
+        label = provider == "openai" ? "openai connectivity" : "ollama connectivity"
+        { label: label, provider: provider, role: role }
+      end
+    end
+
+    def check_ready(role, provider_name)
+      adapter = context.llm(role)
+      model = role == :planner ? context.planner_model : context.config["model"]
+      response = adapter.chat("Respond with the single word READY.", model: model, params: { temperature: 0.0 })
+      text = response.to_s.strip
+      raise "Unexpected response from #{provider_name}: #{response.inspect}" unless text.downcase.include?("ready")
+
+      "response: #{text}"
     end
   end
 end

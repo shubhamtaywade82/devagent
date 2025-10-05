@@ -8,8 +8,9 @@ RSpec.describe Devagent::Diagnostics do
 
   let(:output) { StringIO.new }
   let(:index) do
-    instance_double(Devagent::Index, build!: nil, search: [], document_count: 2)
+    instance_double(Devagent::EmbeddingIndex, build!: nil, document_count: 2)
   end
+  let(:llm_adapter) { instance_double("LLMAdapter") }
   let(:plugin) do
     Module.new do
       def self.name
@@ -23,12 +24,18 @@ RSpec.describe Devagent::Diagnostics do
       config: { "model" => "llama2" },
       plugins: [plugin],
       index: index,
-      chat: "READY"
+      planner_model: "llama2",
+      provider: "ollama"
     )
   end
 
   before do
-    allow(context).to receive(:chat).and_return("READY")
+    allow(context).to receive(:llm).and_return(llm_adapter)
+    allow(context).to receive(:provider).with(:default).and_return("ollama")
+    allow(context).to receive(:provider).with(:planner).and_return("ollama")
+    allow(context).to receive(:provider).with(:embedding).and_return("ollama")
+    allow(llm_adapter).to receive(:chat).and_return("READY")
+    allow(index).to receive(:search).and_return([])
   end
 
   it "returns true when all checks pass" do
@@ -39,7 +46,7 @@ RSpec.describe Devagent::Diagnostics do
   end
 
   it "returns false when a check fails" do
-    allow(context).to receive(:chat).and_raise(StandardError, "connection refused")
+    allow(llm_adapter).to receive(:chat).and_raise(StandardError, "connection refused")
 
     expect(diagnostics.run).to be(false)
 

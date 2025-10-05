@@ -2,6 +2,7 @@
 
 require "yaml"
 require_relative "embedding_index"
+require_relative "llm"
 require_relative "memory"
 require_relative "ollama"
 require_relative "plugin_loader"
@@ -29,6 +30,7 @@ module Devagent
       {
         "model" => "qwen2.5-coder:7b-instruct",
         "planner_model" => "llama3.1:8b-instruct",
+        "provider" => "ollama",
         "ollama" => {
           "host" => "http://localhost:11434",
           "params" => {
@@ -36,8 +38,16 @@ module Devagent
             "top_p" => 0.95
           }
         },
+        "openai" => {
+          "params" => {
+            "temperature" => 0.2,
+            "top_p" => 0.95
+          },
+          "embedding_model" => "text-embedding-3-small"
+        },
         "index" => {
           "embed_model" => "nomic-embed-text",
+          "embed_provider" => "ollama",
           "globs" => ["**/*.{rb,ru,erb,haml,slim,js,jsx,ts,tsx}"],
           "chunk_size" => 1800,
           "overlap" => 200,
@@ -60,42 +70,81 @@ module Devagent
       @memory = Memory.new(repo_path)
       @session_memory = SessionMemory.new(repo_path, limit: config.dig("memory", "short_term_turns"))
       @tracer = Tracer.new(repo_path)
-      @ollama = Ollama::Client.new(config.fetch("ollama"))
+      @ollama = Ollama::Client.new(config.fetch("ollama", {}))
       @tool_registry = ToolRegistry.default
       @tool_bus = ToolBus.new(self, registry: @tool_registry)
       @index = EmbeddingIndex.new(repo_path, config["index"], embedder: method(:embed_text), logger: @tracer.method(:debug))
       @plugins = PluginLoader.load_plugins(self)
       @plugins.each { |plugin| plugin.on_load(self) if plugin.respond_to?(:on_load) }
+      @llms = {}
     end
 
     def planner_model
       config["planner_model"] || config["model"]
     end
 
-    def embed_text(text, model: config.dig("index", "embed_model"))
-      Array(ollama.embed(prompt: text, model: model)).map(&:to_f)
+    def provider(role = :default)
+      case role
+      when :planner
+        config["planner_provider"] || provider(:default)
+      when :embedding
+        config.dig("index", "embed_provider") || provider(:default)
+      else
+        config["provider"] || "ollama"
+      end
     end
 
-    def chat(prompt, model: config["model"], stream: false, params: {})
-      params = config.dig("ollama", "params").to_h.merge(params)
-      stream ? ollama.stream(prompt: prompt, model: model, params: params) : ollama.generate(prompt: prompt, model: model, params: params)
+    def providers
+      %i[default planner embedding].map { |role| provider(role) }.compact.uniq
+    end
+
+    def llm_params(provider)
+      params =
+        case provider
+        when "openai"
+          config.dig("openai", "params")
+        else
+          config.dig("ollama", "params")
+        end
+      symbolize_keys(params || {})
+    end
+
+    def openai_api_key
+      key = config.dig("openai", "api_key") || ENV["OPENAI_API_KEY"]
+      key&.strip
+    end
+
+    def llm(role = :default)
+      @llms[role] ||= Devagent::LLM.build(self, role: role)
+    end
+
+    def embed_text(text, model: config.dig("index", "embed_model"))
+      embeddings = llm(:embedding).embed([text], model: model)
+      Array(embeddings.first).map(&:to_f)
+    end
+
+    def chat(prompt, model: config["model"], stream: false, params: {}, &block)
+      adapter = llm(:default)
+      merged_params = llm_params(provider(:default)).merge(symbolize_keys(params))
+      if stream
+        adapter.stream(prompt, model: model, params: merged_params) do |token|
+          block&.call(token)
+        end
+      else
+        adapter.chat(prompt, model: model, params: merged_params)
+      end
     end
 
     def planner(prompt)
-      params = config.dig("ollama", "params").to_h.merge("temperature" => 0.1)
-      ollama.generate(prompt: prompt, model: planner_model, params: params)
-    end
-
-    def llm
-      @llm ||= lambda do |prompt, **opts|
-        chat(prompt, **opts)
-      end
+      adapter = llm(:planner)
+      params = llm_params(provider(:planner)).merge(temperature: 0.1)
+      adapter.chat(prompt, model: planner_model, params: params)
     end
 
     private
 
-    def embedder
-      method(:embed_text)
+    def symbolize_keys(hash)
+      hash.each_with_object({}) { |(key, value), memo| memo[key.to_sym] = value }
     end
   end
 
