@@ -5,15 +5,23 @@ require "fileutils"
 
 RSpec.describe Devagent::Context do
   let(:repo) { Dir.mktmpdir }
-  let(:original_key) { ENV.delete("OPENAI_API_KEY") }
+
+  around do |example|
+    original_key = ENV["OPENAI_API_KEY"]
+    ENV.delete("OPENAI_API_KEY")
+
+    example.run
+  ensure
+    if original_key
+      ENV["OPENAI_API_KEY"] = original_key
+    else
+      ENV.delete("OPENAI_API_KEY")
+    end
+    FileUtils.remove_entry(repo)
+  end
 
   before do
     File.write(File.join(repo, "dummy.rb"), "puts 'hi'\n")
-  end
-
-  after do
-    ENV["OPENAI_API_KEY"] = original_key
-    FileUtils.remove_entry(repo)
   end
 
   it "selects OpenAI adapter when provider is auto and key present" do

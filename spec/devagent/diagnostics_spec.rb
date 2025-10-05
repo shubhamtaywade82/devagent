@@ -33,11 +33,10 @@ RSpec.describe Devagent::Diagnostics do
     allow(context).to receive(:model_for).with(:reviewer).and_return("llama2")
     allow(context).to receive(:provider_for).and_return("ollama")
     allow(context).to receive(:query).and_return("READY")
+    allow(index).to receive(:search).and_return([])
   end
 
   it "returns true when all checks pass" do
-    allow(index).to receive(:search).and_return([])
-
     expect(diagnostics.run).to be(true)
 
     output.rewind
