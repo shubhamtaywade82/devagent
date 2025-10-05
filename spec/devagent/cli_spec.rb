@@ -8,12 +8,12 @@ RSpec.describe Devagent::CLI do
     allow(Devagent::Context).to receive(:build).and_return(context)
   end
 
-  it "builds a context and starts the REPL" do
+  it "builds a context and starts the REPL (default)" do
     repl = instance_double(Devagent::Auto, repl: nil)
 
     allow(Devagent::Auto).to receive(:new).and_return(repl)
 
-    described_class.start(["start"])
+    described_class.start([])
 
     expect(Devagent::Context).to have_received(:build).with(Dir.pwd, {})
     expect(Devagent::Auto).to have_received(:new).with(context, input: $stdin, output: $stdout)

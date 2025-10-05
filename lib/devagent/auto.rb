@@ -24,12 +24,19 @@ module Devagent
         break if line.nil? || EXIT.include?(line.strip.downcase)
         next if line.strip.empty?
 
-        orchestrator.run(line.strip)
+        if line.strip.downcase == "start"
+          output.puts("Already running the REPL.")
+          next
+        end
+
+        begin
+          orchestrator.run(line.strip)
+        rescue StandardError => e
+          output.puts("Error: #{e.message}")
+          context.tracer.event("repl_error", message: e.message)
+        end
       rescue Interrupt
         output.puts("^C")
-      rescue StandardError => e
-        output.puts("Error: #{e.message}")
-        context.tracer.event("repl_error", message: e.message)
       end
 
       output.puts("Goodbye!")

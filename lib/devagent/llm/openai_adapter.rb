@@ -7,12 +7,20 @@ module Devagent
     # Adapter that wraps the ruby-openai client and exposes a common interface
     # for querying, streaming, and embedding.
     class OpenAIAdapter
-      DEFAULT_EMBED_MODEL = "text-embedding-3-small".freeze
+      DEFAULT_EMBED_MODEL = "text-embedding-3-small"
 
       attr_reader :model, :provider
 
       def initialize(api_key:, model:, default_params: {}, embedding_model: nil)
-        @client = OpenAI::Client.new(access_token: api_key)
+        # Configure globally (works across ruby-openai versions), then use default ctor.
+        begin
+          OpenAI.configure do |c|
+            c.access_token = api_key
+          end
+        rescue StandardError
+          ENV["OPENAI_ACCESS_TOKEN"] ||= api_key.to_s
+        end
+        @client = OpenAI::Client.new
         @model = model
         @default_params = symbolize_keys(default_params)
         @embedding_model = embedding_model || DEFAULT_EMBED_MODEL
@@ -21,10 +29,10 @@ module Devagent
 
       def query(prompt, params: {}, response_format: nil)
         payload = build_parameters(prompt, params: params, response_format: response_format)
-        response = client.chat(parameters: payload)
+        response = safe_chat(payload)
         fetch_content(response)
-      rescue OpenAI::Error => e
-        raise Error, "OpenAI (model=#{model}) query failed: #{e.message}"
+        # rescue StandardError => e
+        #   raise Error, "OpenAI (model=#{model}) query failed: #{e.message}"
       end
 
       def stream(prompt, params: {}, response_format: nil, on_token: nil)
@@ -38,24 +46,20 @@ module Devagent
         end
         payload = build_parameters(prompt, params: params, response_format: response_format)
         payload[:stream] = handler
-        client.chat(parameters: payload)
+        safe_chat(payload)
         buffer
-      rescue OpenAI::Error => e
-        raise Error, "OpenAI (model=#{model}) stream failed: #{e.message}"
+        # rescue StandardError => e
+        #   raise Error, "OpenAI (model=#{model}) stream failed: #{e.message}"
       end
 
       def embed(texts, model: nil)
-        response = client.embeddings(
-          parameters: {
-            model: model || embedding_model,
-            input: Array(texts)
-          }
-        )
+        params = { model: model || embedding_model, input: Array(texts) }
+        response = safe_embeddings(params)
         response.fetch("data").map do |row|
           Array(row.fetch("embedding")).map(&:to_f)
         end
-      rescue OpenAI::Error => e
-        raise Error, "OpenAI embeddings (model=#{model || embedding_model}) failed: #{e.message}"
+        # rescue StandardError => e
+        #   raise Error, "OpenAI embeddings (model=#{model || embedding_model}) failed: #{e.message}"
       end
 
       private
@@ -75,6 +79,15 @@ module Devagent
         payload[:max_tokens] = merged[:max_tokens] if merged.key?(:max_tokens)
         payload[:response_format] = response_format if response_format
         payload
+      end
+
+      # Use ruby-openai v5+ signature consistently
+      def safe_chat(parameters)
+        client.chat(parameters: parameters)
+      end
+
+      def safe_embeddings(parameters)
+        client.embeddings(parameters: parameters)
       end
 
       def fetch_content(response)

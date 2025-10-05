@@ -74,12 +74,10 @@ module Devagent
       context.query(
         role: :planner,
         prompt: prompt,
-        stream: !streamer.nil?,
+        stream: false,
         response_format: response_format,
         params: { temperature: 0.1 }
-      ) do |token|
-        streamer&.token(:planner, token)
-      end
+      )
     end
 
     def review_plan(task, raw_plan)

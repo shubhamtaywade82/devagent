@@ -1,13 +1,15 @@
 # frozen_string_literal: true
 
 RSpec.describe Devagent::Planner do
-  let(:streamer) { instance_double(Devagent::Streamer, token: nil) }
+  subject(:planner) { described_class.new(context, streamer: streamer) }
+
+  let(:streamer) { instance_double(Devagent::Streamer) }
   let(:index) { instance_double(Devagent::EmbeddingIndex, retrieve: []) }
   let(:session_memory) { instance_double(Devagent::SessionMemory, last_turns: []) }
   let(:tool_registry) do
     double(tools: {
-      "fs_write" => double(name: "fs_write", description: "write", handler: :write_file)
-    })
+             "fs_write" => double(name: "fs_write", description: "write", handler: :write_file)
+           })
   end
   let(:context) do
     instance_double(
@@ -19,8 +21,6 @@ RSpec.describe Devagent::Planner do
       tracer: instance_double(Devagent::Tracer, event: nil)
     )
   end
-
-  subject(:planner) { described_class.new(context, streamer: streamer) }
 
   let(:plan_json) do
     {
@@ -39,9 +39,8 @@ RSpec.describe Devagent::Planner do
     allow(context).to receive(:provider_for).with(:reviewer).and_return("openai")
     allow(context).to receive(:provider_for).with(:embedding).and_return("openai")
     allow(context).to receive(:provider_for).and_return("openai")
-    allow(context).to receive(:query) do |role:, **kwargs, &block|
+    allow(context).to receive(:query) do |role:, **kwargs|
       if role == :planner
-        %w[{ plan }].each { |token| block&.call(token) }
         plan_json
       else
         review_json
@@ -55,15 +54,14 @@ RSpec.describe Devagent::Planner do
     expect(plan.confidence).to eq(0.9)
     expect(plan.summary).to eq("Implement feature")
     expect(plan.actions.length).to eq(1)
-    expect(streamer).to have_received(:token).with(:planner, "{")
+    # streaming disabled; ensure plan parsed correctly
   end
 
   it "replans once when reviewer finds issues" do
     attempts = 0
-    allow(context).to receive(:query) do |role:, **kwargs, &block|
+    allow(context).to receive(:query) do |role:, **kwargs|
       if role == :planner
         attempts += 1
-        %w[{ plan }].each { |token| block&.call(token) }
         plan_json
       else
         attempts == 1 ? { "approved" => false, "issues" => ["Add tests"] }.to_json : review_json

@@ -41,6 +41,7 @@ Gem::Specification.new do |spec|
 
   # === Runtime dependencies (keep light) ===
   spec.add_dependency "diffy", "~> 3.4"
+  spec.add_dependency "dotenv", "~> 2.8"
   spec.add_dependency "json-schema", "~> 4.3"
   spec.add_dependency "parallel", "~> 1.24"
   spec.add_dependency "ruby-openai", "~> 5.0"

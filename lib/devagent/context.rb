@@ -15,8 +15,8 @@ module Devagent
   # Context assembles shared dependencies for a DevAgent run and resolves
   # provider/model selections for each role.
   class Context
-    attr_reader :repo_path, :config, :memory, :session_memory,
-                :tracer, :tool_registry, :tool_bus, :plugins
+    attr_reader :repo_path, :config, :memory, :session_memory, :tracer, :tool_registry, :tool_bus, :plugins, :index,
+                :ollama_client, :llm_cache
 
     def self.build(repo_path, overrides = {})
       config = load_config(repo_path)
@@ -38,7 +38,7 @@ module Devagent
         "reviewer_model" => "gpt-4o",
         "embed_model" => "text-embedding-3-small",
         "ollama" => {
-          "host" => "http://localhost:11434",
+          "host" => "http://172.29.128.1:11434",
           "params" => {
             "temperature" => 0.2,
             "top_p" => 0.95
@@ -61,9 +61,11 @@ module Devagent
           "require_tests_green" => true,
           "dry_run" => false,
           "allowlist" => ["app/**", "lib/**", "spec/**", "config/**", "db/**", "src/**"],
-          "denylist" => [".git/**", "node_modules/**", "log/**", "tmp/**", "dist/**", "build/**", ".env*", "config/credentials*"]
+          "denylist" => [".git/**", "node_modules/**", "log/**", "tmp/**", "dist/**", "build/**", ".env*",
+                         "config/credentials*"]
         },
-        "memory" => { "short_term_turns" => 20 }
+        "memory" => { "short_term_turns" => 20 },
+        "ui" => { "quiet" => false }
       }
     end
 
@@ -78,11 +80,11 @@ module Devagent
       overrides.each do |key, value|
         next if value.nil?
 
-        if value.is_a?(Hash) && base[key].is_a?(Hash)
-          result[key] = deep_merge(base[key], stringify_keys(value))
-        else
-          result[key] = value
-        end
+        result[key] = if value.is_a?(Hash) && base[key].is_a?(Hash)
+                        deep_merge(base[key], stringify_keys(value))
+                      else
+                        value
+                      end
       end
       result
     end
@@ -106,18 +108,6 @@ module Devagent
         context: self,
         logger: tracer.method(:debug)
       )
-    end
-
-    def index
-      @index
-    end
-
-    def ollama_client
-      @ollama_client
-    end
-
-    def llm_cache
-      @llm_cache
     end
 
     def provider_for(role)
@@ -212,9 +202,9 @@ module Devagent
 
     def ensure_provider_requirements!
       providers = %i[default planner developer reviewer tester embedding].map { |role| provider_for(role) }.uniq
-      if providers.include?("openai") && !openai_available?
-        raise Error, "OpenAI provider requested but OPENAI_API_KEY is not set"
-      end
+      return unless providers.include?("openai") && !openai_available?
+
+      raise Error, "OpenAI provider requested but OPENAI_API_KEY is not set"
     end
 
     def resolve_provider(raw)

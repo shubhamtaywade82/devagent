@@ -19,8 +19,9 @@ module Devagent
       true
     end
 
+    # Default task: start the REPL when invoked without a subcommand
     desc "start", "Start autonomous REPL (default)"
-    def start
+    def start(*_args)
       ctx = build_context
       Auto.new(ctx, input: $stdin, output: $stdout).repl
     end

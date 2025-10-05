@@ -3,6 +3,7 @@ PATH
   specs:
     devagent (0.1.0)
       diffy (~> 3.4)
+      dotenv (~> 2.8)
       json-schema (~> 4.3)
       parallel (~> 1.24)
       ruby-openai (~> 5.0)
@@ -21,6 +22,7 @@ GEM
     date (3.4.1)
     diff-lcs (1.6.2)
     diffy (3.4.4)
+    dotenv (2.8.1)
     erb (5.0.2)
     event_stream_parser (0.3.0)
     faraday (2.14.0)

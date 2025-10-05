@@ -36,7 +36,7 @@ developer_model: gpt-4o-mini
 reviewer_model: gpt-4o
 embed_model: text-embedding-3-small
 ollama:
-  host: "http://localhost:11434"
+  host: "http://172.29.128.1:11434"
   params:
     temperature: 0.2
     top_p: 0.95
@@ -72,12 +72,12 @@ memory:
 
 ## CLI Commands
 
-| Command | Description |
-| ------- | ----------- |
-| `devagent` | Launch the interactive REPL (default task). |
-| `devagent --provider openai --model gpt-4o-mini` | Override provider/model for a session. |
-| `devagent diag` | Print provider, model, embedding backend, and key status diagnostics. |
-| `devagent test` | Run connectivity diagnostics. |
+| Command                                          | Description                                                           |
+| ------------------------------------------------ | --------------------------------------------------------------------- |
+| `devagent`                                       | Launch the interactive REPL (default task).                           |
+| `devagent --provider openai --model gpt-4o-mini` | Override provider/model for a session.                                |
+| `devagent diag`                                  | Print provider, model, embedding backend, and key status diagnostics. |
+| `devagent test`                                  | Run connectivity diagnostics.                                         |
 
 ## Tooling & Scripts
 
@@ -106,7 +106,7 @@ ruby script/smoke.rb
 - Bundler & Git
 - SQLite (for embeddings store)
 - Optional Node.js for front-end/Jest tooling
-- Ollama running at `http://localhost:11434` for offline mode, or an OpenAI API key for cloud mode
+- Ollama running at `http://172.29.128.1:11434` for offline mode, or an OpenAI API key for cloud mode
 
 ## Development
 
