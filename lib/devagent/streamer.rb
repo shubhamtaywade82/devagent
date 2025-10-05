@@ -14,6 +14,12 @@ module Devagent
       context.session_memory.append("assistant", message)
     end
 
+    def token(role, text)
+      output.print(text)
+      output.flush
+      context.tracer.event("stream", role: role, token: text)
+    end
+
     private
 
     attr_reader :context, :output

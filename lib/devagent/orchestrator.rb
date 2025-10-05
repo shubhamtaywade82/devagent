@@ -11,8 +11,8 @@ module Devagent
 
     def initialize(context, output: $stdout)
       @context = context
-      @planner = Planner.new(context)
       @streamer = Streamer.new(context, output: output)
+      @planner = Planner.new(context, streamer: @streamer)
     end
 
     def run(task)

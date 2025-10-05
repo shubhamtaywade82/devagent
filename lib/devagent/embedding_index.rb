@@ -2,6 +2,7 @@
 
 require "digest"
 require "fileutils"
+require "json"
 require "pathname"
 require_relative "vector_store_sqlite"
 require_relative "util"
@@ -13,34 +14,42 @@ module Devagent
       "globs" => ["**/*.{rb,ru,erb,haml,slim,js,jsx,ts,tsx}"],
       "chunk_size" => 1800,
       "overlap" => 200,
-      "embed_model" => "nomic-embed-text",
       "threads" => 4
     }.freeze
 
+    META_FILENAME = "embeddings.meta.json".freeze
+
     Entry = Struct.new(:path, :chunk_index, :text, :embedding, keyword_init: true)
 
-    attr_reader :repo_path, :config, :store
+    attr_reader :repo_path, :config, :store, :context
 
-    def initialize(repo_path, config, embedder:, logger: nil, store: nil)
+    def initialize(repo_path, config, context:, logger: nil, store: nil)
       @repo_path = repo_path
       @config = DEFAULTS.merge(config || {})
-      @embedder = embedder
+      @context = context
       @logger = logger || ->(_msg) {}
       data_dir = File.join(repo_path, ".devagent")
       FileUtils.mkdir_p(data_dir)
       store_path = File.join(data_dir, "embeddings.sqlite3")
       @store = store || VectorStoreSqlite.new(store_path)
+      @meta_path = File.join(data_dir, META_FILENAME)
+      ensure_backend_consistency!
     end
 
     def build!
       chunks = enumerate_chunks
-      return if chunks.empty?
+      return [] if chunks.empty?
 
-      embeddings = chunks.filter_map do |chunk|
-        vector = embed(chunk[:text])
-        next unless vector
+      embeddings = []
+      chunk_texts = chunks.map { |chunk| chunk[:text] }
+      vectors = embed_many(chunk_texts)
+      return [] if vectors.empty?
 
-        Entry.new(
+      chunks.each_with_index do |chunk, idx|
+        vector = vectors[idx]
+        next unless valid_vector?(vector)
+
+        embeddings << Entry.new(
           path: chunk[:path],
           chunk_index: chunk[:chunk_index],
           text: chunk[:text],
@@ -49,12 +58,13 @@ module Devagent
       end
 
       store.upsert_many(embeddings.map { |entry| serialize(entry) }) unless embeddings.empty?
+      persist_meta(current_backend.merge("dim" => Array(vectors.first).size)) if embeddings.any?
       embeddings
     end
 
     def search(query, k: 8)
-      vector = embed(query)
-      return [] if vector.nil?
+      vector = embed_many([query]).first
+      return [] unless valid_vector?(vector)
 
       store.similar(vector, limit: k).map do |entry|
         metadata = entry.metadata
@@ -74,14 +84,24 @@ module Devagent
       search(query, k: limit)
     end
 
+    def metadata
+      load_meta || {}
+    end
+
     private
 
-    def embed(text)
-      vector = @embedder.call(text, model: config["embed_model"])
-      vector if vector.is_a?(Array) && vector.all? { |v| v.is_a?(Numeric) }
+    attr_reader :logger, :meta_path
+
+    def embed_many(texts)
+      adapter = context.llm_for(:embedding)
+      adapter.embed(Array(texts), model: context.model_for(:embedding))
     rescue StandardError => e
-      @logger.call("embedding failed: #{e.message}")
-      nil
+      logger.call("embedding failed: #{e.message}")
+      []
+    end
+
+    def valid_vector?(vector)
+      vector.is_a?(Array) && vector.all? { |v| v.is_a?(Numeric) }
     end
 
     def enumerate_chunks
@@ -95,7 +115,7 @@ module Devagent
           { path: path, chunk_index: chunk_index, text: chunk_text }
         end
       rescue StandardError => e
-        @logger.call("index skip #{path}: #{e.message}")
+        logger.call("index skip #{path}: #{e.message}")
         []
       end
     end
@@ -142,6 +162,36 @@ module Devagent
           "text" => entry.text
         }
       }
+    end
+
+    def ensure_backend_consistency!
+      saved = load_meta
+      return unless saved
+
+      backend = current_backend
+      return if saved["provider"] == backend["provider"] && saved["model"] == backend["model"]
+
+      logger.call("Embedding backend changed (#{saved["provider"]}/#{saved["model"]} -> #{backend["provider"]}/#{backend["model"]}). Rebuilding index…")
+      store.clear!
+      FileUtils.rm_f(meta_path)
+    end
+
+    def current_backend
+      context.embedding_backend_info
+    end
+
+    def load_meta
+      return unless File.exist?(meta_path)
+
+      JSON.parse(File.read(meta_path, encoding: "UTF-8"))
+    rescue JSON::ParserError
+      nil
+    end
+
+    def persist_meta(meta)
+      File.write(meta_path, JSON.pretty_generate(meta))
+    rescue StandardError
+      nil
     end
   end
 

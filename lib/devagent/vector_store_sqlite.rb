@@ -35,6 +35,11 @@ module Devagent
       persist_entries!
     end
 
+    def clear!
+      @entries.clear
+      persist_entries!
+    end
+
     def all
       @entries.dup
     end

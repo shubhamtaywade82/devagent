@@ -51,15 +51,15 @@ module Devagent
     end
 
     def check_configuration
-      model = configured_model
-      "model: #{model}, #{plugin_summary}"
+      "provider: #{context.resolved_provider}, models: #{model_summary}, #{plugin_summary}"
     end
 
     def check_index
       index = context.index
       index.build!
       index.search("diagnostic", k: 1) # ensure retrieval executes without error
-      "indexed chunks: #{index.document_count}"
+      meta = index.metadata
+      "indexed chunks: #{index.document_count}, embedding: #{meta}"
     end
 
     def check_ollama(role = :default)
@@ -78,11 +78,13 @@ module Devagent
       end
     end
 
-    def configured_model
-      model = (context.config || {})["model"].to_s
-      raise "LLM model not configured. Set `model` in .devagent.yml." if model.empty?
-
-      model
+    def model_summary
+      {
+        default: context.model_for(:default),
+        planner: context.model_for(:planner),
+        developer: context.model_for(:developer),
+        reviewer: context.model_for(:reviewer)
+      }.transform_values(&:to_s)
     end
 
     def plugin_summary
@@ -91,13 +93,11 @@ module Devagent
     end
 
     def connectivity_checks
-      return [] unless context.respond_to?(:provider)
-
-      roles = %i[default planner]
+      roles = %i[default planner developer reviewer]
       seen = {}
 
       roles.filter_map do |role|
-        provider = context.provider(role)
+        provider = context.provider_for(role)
         next if provider.nil? || seen[provider]
 
         seen[provider] = true
@@ -107,9 +107,11 @@ module Devagent
     end
 
     def check_ready(role, provider_name)
-      adapter = context.llm(role)
-      model = role == :planner ? context.planner_model : context.config["model"]
-      response = adapter.chat("Respond with the single word READY.", model: model, params: { temperature: 0.0 })
+      response = context.query(
+        role: role,
+        prompt: "Respond with the single word READY.",
+        params: { temperature: 0.0 }
+      )
       text = response.to_s.strip
       raise "Unexpected response from #{provider_name}: #{response.inspect}" unless text.downcase.include?("ready")
 
