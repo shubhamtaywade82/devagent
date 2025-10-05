@@ -36,6 +36,18 @@ module Devagent
         @logger ||= Logger.new(output: output)
       end
 
+      def box
+        @box ||= Box.new(output: output, colorizer: colorizer)
+      end
+
+      def command
+        @command ||= Command.new(output: output, colorizer: colorizer)
+      end
+
+      def progress
+        @progress ||= Progress.new(output: output, colorizer: colorizer)
+      end
+
       def interactive?
         output.respond_to?(:tty?) ? output.tty? : true
       end

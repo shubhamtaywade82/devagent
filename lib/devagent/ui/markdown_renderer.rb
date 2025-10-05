@@ -2,75 +2,53 @@
 
 require "tty/markdown"
 require "tty/cursor"
+require "tty/screen"
 
 module Devagent
   module UI
-    # MarkdownRenderer renders streaming markdown output while respecting TTYs.
+    # MarkdownRenderer provides beautiful streaming markdown output for LLM responses.
     class MarkdownRenderer
-      DEFAULT_WIDTH = 100
-
       def initialize(output: $stdout, width: nil)
         @output = output
-        @width = width || detect_width
-        @enabled = output.respond_to?(:tty?) ? output.tty? : true
-        @markdown = TTY::Markdown
+        @width = width || TTY::Screen.width - 4
         @cursor = TTY::Cursor
-        @buffer = +""
-        @streaming = false
       end
 
-      def start
-        return unless enabled?
+      def render_stream(buffer)
+        return if buffer.empty?
 
-        output.print(cursor.save)
+        # Hide cursor, move to beginning of line, render, show cursor
         output.print(cursor.hide)
-        @streaming = true
+        output.print(cursor.column(0))
+        output.print(cursor.clear_line)
+        output.print(render_markdown(buffer))
+        output.print(cursor.show)
+        output.flush
+      rescue StandardError => e
+        # Fallback to plain text if markdown rendering fails
+        output.print(cursor.show)
+        output.print(buffer)
+        output.flush
       end
 
-      def append(token)
-        if enabled?
-          buffer << token
-          render
-        else
-          output.print(token)
-        end
+      def render_final(buffer)
+        return if buffer.empty?
+
+        output.print(cursor.show)
+        output.print(render_markdown(buffer))
+        output.puts unless buffer.end_with?("\n")
       end
 
-      def finish
-        if enabled?
-          render
-          output.print("\n") unless buffer.end_with?("\n")
-          output.print(cursor.show)
-          output.print("\n")
-        else
-          output.puts unless buffer.end_with?("\n")
-        end
-      ensure
-        reset!
+      def render_static(text)
+        render_markdown(text)
       end
 
       private
 
-      attr_reader :output, :width, :markdown, :cursor, :buffer
+      attr_reader :output, :width, :cursor
 
-      def enabled?
-        @enabled
-      end
-
-      def render
-        formatted = markdown.parse(buffer, width: width)
-        output.print(cursor.restore)
-        output.print(cursor.clear_screen_down)
-        output.print(formatted)
-      end
-
-      def detect_width
-        (ENV["COLUMNS"].to_i.positive? ? ENV["COLUMNS"].to_i : DEFAULT_WIDTH) - 2
-      end
-
-      def reset!
-        buffer.clear
-        @streaming = false
+      def render_markdown(text)
+        TTY::Markdown.parse(text, width: width)
       end
     end
   end

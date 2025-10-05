@@ -3,15 +3,17 @@
 require_relative "planner"
 require_relative "prompts"
 require_relative "streamer"
+require_relative "ui"
 
 module Devagent
   # Orchestrator coordinates planning, execution, and testing loops.
   class Orchestrator
-    attr_reader :context, :planner, :streamer
+    attr_reader :context, :planner, :streamer, :ui
 
-    def initialize(context, output: $stdout)
+    def initialize(context, output: $stdout, ui: nil)
       @context = context
-      @streamer = Streamer.new(context, output: output)
+      @ui = ui || UI::Toolkit.new(output: output)
+      @streamer = Streamer.new(context, output: output, ui: @ui)
       @planner = Planner.new(context, streamer: @streamer)
     end
 
@@ -43,7 +45,7 @@ module Devagent
         context.tracer.event("execute_action", action: action)
         context.tool_bus.invoke(action)
       rescue StandardError => e
-        streamer.say("Action #{action["type"]} failed: #{e.message}")
+        streamer.say("Action #{action["type"]} failed: #{e.message}", level: :error)
         break
       end
     end
@@ -54,18 +56,18 @@ module Devagent
         return false if result == :ok
 
         if result == :skipped
-          streamer.say("Tests skipped (no command available).") unless quiet?
+          streamer.say("Tests skipped (no command available).", level: :warn) unless quiet?
           return false
         end
 
-        streamer.say("Tests failed, replanning…") unless quiet?
+        streamer.say("Tests failed, replanning…", level: :warn) unless quiet?
         context.session_memory.append("assistant", "Tests failed on iteration #{iteration + 1}")
         context.tracer.event("tests_failed")
         return iteration + 1 < (context.config.dig("auto", "max_iterations") || 3)
       end
 
       unless context.tool_bus.changes_made?
-        streamer.say("No changes detected; answering directly.") unless quiet?
+        streamer.say("No changes detected; answering directly.", level: :warn) unless quiet?
         answer_unactionable(task, confidence)
       end
       false
@@ -78,7 +80,7 @@ module Devagent
       command ||= "bundle exec rspec"
       context.tool_bus.run_tests("command" => command)
     rescue StandardError => e
-      streamer.say("Test command failed: #{e.message}")
+      streamer.say("Test command failed: #{e.message}", level: :error)
       :failed
     end
 
@@ -100,7 +102,7 @@ module Devagent
         prompt: prompt,
         stream: false
       )
-      streamer.say(answer.to_s.strip)
+      streamer.say(answer.to_s.strip, markdown: true)
     rescue StandardError => e
       streamer.say("Answering failed: #{e.message}") unless quiet?
     end
