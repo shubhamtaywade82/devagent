@@ -1,12 +1,15 @@
 # frozen_string_literal: true
 
 require "json"
+require "fileutils"
 
 module Devagent
   # Memory persists lightweight key/value data alongside the repository.
   class Memory
     def initialize(repo_path)
-      @path = File.join(repo_path, ".devagent.memory.json")
+      dir = File.join(repo_path, ".devagent")
+      FileUtils.mkdir_p(dir)
+      @path = File.join(dir, "memory.json")
       @store = load_store
     end
 

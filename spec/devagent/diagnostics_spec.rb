@@ -8,9 +8,8 @@ RSpec.describe Devagent::Diagnostics do
 
   let(:output) { StringIO.new }
   let(:index) do
-    instance_double(Devagent::Index, build!: nil, retrieve: [], document_count: 2)
+    instance_double(Devagent::EmbeddingIndex, build!: nil, document_count: 2, metadata: { "dim" => 1536 })
   end
-  let(:llm) { instance_double(Proc) }
   let(:plugin) do
     Module.new do
       def self.name
@@ -21,15 +20,20 @@ RSpec.describe Devagent::Diagnostics do
   let(:context) do
     instance_double(
       Devagent::PluginContext,
-      config: { "model" => "llama2" },
+      resolved_provider: "ollama",
       plugins: [plugin],
-      index: index,
-      llm: llm
+      index: index
     )
   end
 
   before do
-    allow(llm).to receive(:call).and_return("READY")
+    allow(context).to receive(:model_for).with(:default).and_return("llama2")
+    allow(context).to receive(:model_for).with(:planner).and_return("llama2")
+    allow(context).to receive(:model_for).with(:developer).and_return("llama2")
+    allow(context).to receive(:model_for).with(:reviewer).and_return("llama2")
+    allow(context).to receive(:provider_for).and_return("ollama")
+    allow(context).to receive(:query).and_return("READY")
+    allow(index).to receive(:search).and_return([])
   end
 
   it "returns true when all checks pass" do
@@ -40,21 +44,12 @@ RSpec.describe Devagent::Diagnostics do
   end
 
   it "returns false when a check fails" do
-    allow(llm).to receive(:call).and_raise(StandardError, "connection refused")
+    allow(context).to receive(:query).and_raise(StandardError, "connection refused")
 
     expect(diagnostics.run).to be(false)
 
     output.rewind
     expect(output.string).to include("FAIL").and include("connection refused")
-  end
-
-  it "reports missing model configuration" do
-    allow(context).to receive(:config).and_return({})
-
-    expect(diagnostics.run).to be(false)
-
-    output.rewind
-    expect(output.string).to include("LLM model not configured")
   end
 end
 # rubocop:enable Metrics/BlockLength

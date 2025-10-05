@@ -2,46 +2,87 @@
 
 require "json"
 require "net/http"
+require "uri"
 
 module Devagent
-  # Ollama wraps local HTTP calls to the Ollama inference server.
-  class Ollama
-    ENDPOINT = URI("http://172.29.128.1:11434/api/generate")
+  module Ollama
+    # Client wraps HTTP calls to the Ollama server for generation, streaming, and embeddings.
+    class Client
+      DEFAULT_HOST = "http://localhost:11434"
 
-    def self.query(prompt, model:)
-      puts "[Ollama] Prompt: #{prompt[0..200]}..." # truncate for safety
-      response = perform_request(prompt, model)
-      pp response
-      ensure_success!(response)
-      parsed = parse_response(response.body)
-      puts "[Ollama] Response: #{parsed[0..200]}..." # truncate
-      parsed
-    end
+      def initialize(config = {})
+        host = config.fetch("host", DEFAULT_HOST)
+        @base_uri = URI(host)
+        @default_params = config.fetch("params", {})
+      end
 
-    def self.perform_request(prompt, model)
-      request = Net::HTTP::Post.new(ENDPOINT, "Content-Type" => "application/json")
-      request.body = { model: model, prompt: prompt, stream: false }.to_json
+      def generate(prompt:, model:, params: {})
+        body = request_json("/api/generate", prompt: prompt, model: model, stream: false, options: params)
+        body.fetch("response")
+      end
 
-      Net::HTTP.start(ENDPOINT.hostname, ENDPOINT.port) do |http|
-        http.read_timeout = 120
-        http.request(request)
+      def stream(prompt:, model:, params: {}, &block)
+        request_stream("/api/generate", prompt: prompt, model: model, stream: true, options: params, &block)
+      end
+
+      def embed(prompt:, model:)
+        response = request_json("/api/embeddings", prompt: prompt, model: model)
+        Array(response["embedding"] || response["embeddings"])
+      end
+
+      private
+
+      attr_reader :base_uri, :default_params
+
+      def request_json(path, payload)
+        response = http_post(path, payload)
+        JSON.parse(response.body)
+      rescue JSON::ParserError => e
+        raise Error, "Invalid JSON from Ollama: #{e.message}"
+      end
+
+      def request_stream(path, payload)
+        http = build_http
+        request = build_request(path, payload)
+        http.request(request) do |response|
+          raise Error, "Ollama #{response.code}" unless response.is_a?(Net::HTTPSuccess)
+
+          response.read_body do |chunk|
+            chunk.to_s.each_line do |line|
+              next if line.strip.empty?
+
+              data = JSON.parse(line)
+              token = data["response"]
+              yield token if token && block_given?
+            end
+          end
+        end
+      end
+
+      def http_post(path, payload)
+        http = build_http
+        request = build_request(path, payload)
+        response = http.request(request)
+        raise Error, "Ollama #{response.code}: #{response.body}" unless response.is_a?(Net::HTTPSuccess)
+
+        response
+      end
+
+      def build_http
+        Net::HTTP.new(base_uri.host, base_uri.port).tap do |http|
+          http.read_timeout = 300
+        end
+      end
+
+      def build_request(path, payload)
+        request = Net::HTTP::Post.new(path)
+        request["Content-Type"] = "application/json"
+        merged = default_params.merge(payload.delete(:options) || {})
+        body = payload.dup
+        body[:options] = merged unless merged.empty?
+        request.body = body.to_json
+        request
       end
     end
-    private_class_method :perform_request
-
-    def self.ensure_success!(response)
-      return if response.is_a?(Net::HTTPSuccess)
-
-      raise "Ollama request failed (#{response.code}): #{response.body}"
-    end
-    private_class_method :ensure_success!
-
-    def self.parse_response(body)
-      parsed = JSON.parse(body)
-      parsed.fetch("response")
-    rescue JSON::ParserError
-      raise "Ollama returned invalid JSON"
-    end
-    private_class_method :parse_response
   end
 end

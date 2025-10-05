@@ -1,13 +1,30 @@
-model: "llama3.1:8b"
+provider: auto
+model: "gpt-4o-mini"
+planner_model: "gpt-4o-mini"
+developer_model: "gpt-4o-mini"
+reviewer_model: "gpt-4o"
+embed_model: "text-embedding-3-small"
+ollama:
+  host: "http://localhost:11434"
+  params:
+    temperature: 0.2
+    top_p: 0.95
+openai:
+  params:
+    temperature: 0.2
+    top_p: 0.95
 auto:
   max_iterations: 3
   dry_run: false
   require_tests_green: true
   confirmation_threshold: 0.7
   allowlist:
+    - "app/**"
     - "lib/**"
     - "spec/**"
-    - "sig/**"
+    - "config/**"
+    - "db/**"
+    - "src/**"
     - "bin/**"
     - "exe/**"
   denylist:
@@ -17,7 +34,13 @@ auto:
     - "tmp/**"
     - "dist/**"
     - "build/**"
+    - ".env*"
+    - "config/credentials*"
 index:
   threads: 8
   globs:
     - "**/*.{rb,rbs,ru,erb,haml,slim,js,jsx,ts,tsx}"
+  chunk_size: 1800
+  overlap: 200
+memory:
+  short_term_turns: 20

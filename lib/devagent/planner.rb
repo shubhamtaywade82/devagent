@@ -2,118 +2,184 @@
 
 require "json"
 require "json-schema"
+require_relative "prompts"
 
 module Devagent
-  Plan = Struct.new(:actions, :confidence)
+  Plan = Struct.new(:summary, :actions, :confidence, keyword_init: true)
 
-  # Planner asks the LLM for an actionable plan and validates the response.
+  # Planner coordinates with the planning and review models to produce
+  # validated actions.
   class Planner
-    ACTION_SCHEMA = {
-      "type" => {
-        "type" => "string",
-        "enum" => %w[edit_file create_file apply_patch run_command generate_tests migrate]
-      },
-      "path" => { "type" => %w[string null] },
-      "whole_file" => { "type" => %w[boolean null] },
-      "content" => { "type" => %w[string null] },
-      "patch" => { "type" => %w[string null] },
-      "command" => { "type" => %w[string null] },
-      "notes" => { "type" => %w[string null] }
-    }.freeze
-
     PLAN_SCHEMA = {
       "type" => "object",
-      "required" => %w[actions confidence],
+      "required" => %w[confidence actions],
       "properties" => {
         "confidence" => { "type" => "number", "minimum" => 0, "maximum" => 1 },
-        "actions" => { "type" => "array", "items" => { "type" => "object", "properties" => ACTION_SCHEMA } }
+        "summary" => { "type" => "string" },
+        "actions" => {
+          "type" => "array",
+          "items" => {
+            "type" => "object",
+            "required" => ["type"],
+            "properties" => {
+              "type" => { "type" => "string" },
+              "args" => { "type" => ["object", "null"] }
+            }
+          }
+        }
       }
     }.freeze
 
-    SYSTEM = <<~SYS
-      You are a senior software engineer. Return ONLY valid JSON.
-      JSON:
-      {
-        "confidence": 0.0-1.0,
-        "actions": [
-          {"type": "create_file", "path": "relative/path.rb", "content": "..."},
-          {"type": "edit_file", "path": "app/models/user.rb", "whole_file": true, "content": "..."},
-          {"type": "apply_patch", "path": "app/models/user.rb", "patch": "UNIFIED DIFF"},
-          {"type": "generate_tests", "path": "app/models/user.rb"},
-          {"type": "run_command", "command": "bundle exec rspec"},
-          {"type": "migrate"}
-        ]
+    REVIEW_SCHEMA = {
+      "type" => "object",
+      "required" => %w[approved issues],
+      "properties" => {
+        "approved" => { "type" => "boolean" },
+        "issues" => { "type" => "array", "items" => { "type" => "string" } }
       }
-      Constraints:
-      - Paths must be INSIDE the repository and relative.
-      - Prefer unified diffs for small changes; use whole_file for large rewrites.
-      - For Rails, ensure migrations are reversible; add RSpec when needed.
-      - Keep plans minimal and safe.
-    SYS
+    }.freeze
 
-    DEFAULT_PLAN = Plan.new([], 0.0).freeze
-
-    def self.plan(ctx:, task:)
-      prompt = build_prompt(ctx, task)
-      json = parse_plan(invoke_llm(ctx, prompt))
-      actions = json.fetch("actions", [])
-      confidence = json.fetch("confidence", 0.0).to_f
-      Plan.new(actions, confidence)
+    def initialize(context, streamer: nil)
+      @context = context
+      @streamer = streamer
     end
 
-    def self.safe_retrieve(ctx, task)
-      return "" unless ctx.respond_to?(:index) && ctx.index.respond_to?(:retrieve)
+    def plan(task)
+      attempts = 0
+      feedback = nil
+      raw_plan = nil
 
-      Array(ctx.index.retrieve(task, limit: 12)).join("\n\n")
-    rescue StandardError
-      ""
+      loop do
+        raw_plan = generate_plan(task, feedback)
+        payload = parse_plan(raw_plan)
+        review = review_plan(task, raw_plan)
+        break Plan.new(summary: payload["summary"], actions: payload["actions"] || [], confidence: payload["confidence"].to_f) if review["approved"] || attempts >= 1
+
+        attempts += 1
+        feedback = Array(review["issues"]).reject(&:empty?)
+        context.tracer.event("plan_review_rejected", issues: feedback)
+      end
+    rescue StandardError => e
+      context.tracer.event("planner_error", message: e.message)
+      Plan.new(summary: "planning failed", actions: [], confidence: 0.0)
     end
-    private_class_method :safe_retrieve
 
-    def self.invoke_llm(ctx, prompt)
-      llm = ctx.llm
-      return "" unless llm.respond_to?(:call)
+    private
 
-      llm.call(prompt).to_s
-    rescue StandardError
-      ""
+    attr_reader :context, :streamer
+
+    def generate_plan(task, feedback)
+      prompt = build_prompt(task, feedback)
+      response_format = json_schema_format(PLAN_SCHEMA) if context.provider_for(:planner) == "openai"
+      context.query(
+        role: :planner,
+        prompt: prompt,
+        stream: !streamer.nil?,
+        response_format: response_format,
+        params: { temperature: 0.1 }
+      ) do |token|
+        streamer&.token(:planner, token)
+      end
     end
-    private_class_method :invoke_llm
 
-    def self.parse_plan(raw)
-      return { "actions" => [], "confidence" => 0.0 } if raw.to_s.strip.empty?
+    def review_plan(task, raw_plan)
+      prompt = build_review_prompt(task, raw_plan)
+      response_format = json_schema_format(REVIEW_SCHEMA) if context.provider_for(:reviewer) == "openai"
+      review_raw = context.query(
+        role: :reviewer,
+        prompt: prompt,
+        stream: false,
+        response_format: response_format,
+        params: { temperature: 0.1 }
+      )
+      parse_review(review_raw)
+    rescue StandardError => e
+      context.tracer.event("plan_review_error", message: e.message)
+      { "approved" => true, "issues" => [] }
+    end
 
+    def parse_plan(raw)
       json = JSON.parse(raw)
       JSON::Validator.validate!(PLAN_SCHEMA, json)
       json
-    rescue JSON::ParserError, JSON::Schema::SchemaError, JSON::Schema::ValidationError
-      { "actions" => [], "confidence" => 0.0 }
+    rescue JSON::ParserError, JSON::Schema::ValidationError => e
+      context.tracer.event("plan_invalid_json", message: e.message, raw: raw)
+      { "confidence" => 0.0, "summary" => "invalid plan", "actions" => [] }
     end
-    private_class_method :parse_plan
 
-    def self.build_prompt(ctx, task)
+    def parse_review(raw)
+      json = JSON.parse(raw)
+      JSON::Validator.validate!(REVIEW_SCHEMA, json)
+      json
+    rescue JSON::ParserError, JSON::Schema::ValidationError => e
+      context.tracer.event("plan_review_invalid", message: e.message, raw: raw)
+      { "approved" => true, "issues" => [] }
+    end
+
+    def build_prompt(task, feedback)
+      retrieved = context.index.retrieve(task, limit: 6).map do |snippet|
+        "#{snippet["path"]}:\n#{snippet["text"]}\n---"
+      end.join("\n")
+
+      history = context.session_memory.last_turns(8).map do |turn|
+        "#{turn["role"]}: #{turn["content"]}"
+      end.join("\n")
+
+      plugin_guidance = context.plugins.filter_map do |plugin|
+        plugin.on_prompt(context, task) if plugin.respond_to?(:on_prompt)
+      end.join("\n")
+
+      tools = context.tool_registry.tools.values.map do |tool|
+        "- #{tool.name}: #{tool.description}"
+      end.join("\n")
+
+      feedback_section = if feedback && !Array(feedback).empty?
+                           "Known issues from reviewer:\n#{Array(feedback).join("\n")}"
+                         else
+                           ""
+                         end
+
       <<~PROMPT
-        #{preface_text(ctx, task)}
-        #{SYSTEM}
+        #{Prompts::PLANNER_SYSTEM}
 
-        Repository context (truncated):
-        #{safe_retrieve(ctx, task)}
+        #{plugin_guidance}
 
-        Task from user:
+        Available tools:
+        #{tools}
+
+        Recent conversation:
+        #{history}
+
+        Repository context:
+        #{retrieved}
+
+        #{feedback_section}
+
+        Task:
         #{task}
-
-        Return JSON only.
       PROMPT
     end
-    private_class_method :build_prompt
 
-    def self.preface_text(ctx, task)
-      Array(ctx.plugins).filter_map do |plugin|
-        next unless plugin.respond_to?(:on_prompt)
+    def build_review_prompt(task, raw_plan)
+      <<~PROMPT
+        #{Prompts::PLANNER_REVIEW_SYSTEM}
 
-        plugin.on_prompt(ctx, task)
-      end.join("\n")
+        Task:
+        #{task}
+
+        Proposed plan JSON:
+        #{raw_plan}
+      PROMPT
     end
-    private_class_method :preface_text
+
+    def json_schema_format(schema)
+      {
+        type: "json_schema",
+        json_schema: {
+          name: "devagent_schema",
+          schema: schema
+        }
+      }
+    end
   end
 end
