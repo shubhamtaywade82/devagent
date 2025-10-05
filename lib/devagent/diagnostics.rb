@@ -1,15 +1,18 @@
 # frozen_string_literal: true
 
+require_relative "ui"
+
 module Devagent
   # Diagnostics performs lightweight checks to validate configuration and dependencies.
   class Diagnostics
     def initialize(context, output: $stdout)
       @context = context
       @output = output
+      @ui = UI::Toolkit.new(output: output)
     end
 
     def run
-      output.puts("Running Devagent diagnostics...")
+      ui.logger.info("Running Devagent diagnostics...")
 
       results = [
         check("configuration") { check_configuration },
@@ -30,23 +33,25 @@ module Devagent
       end
 
       success = results.all?
-      output.puts(success ? "All checks passed." : "Some checks failed.")
+      if success
+        ui.logger.success("All checks passed.")
+      else
+        ui.logger.error("Some checks failed.")
+      end
       success
     end
 
     private
 
-    attr_reader :context, :output
+    attr_reader :context, :output, :ui
 
-    def check(label)
-      output.print(" - #{label}... ")
-      message = yield
-      output.puts("OK")
+    def check(label, &)
+      spinner = ui.spinner(label)
+      message = spinner.run(&)
       output.puts("   #{message}") if message.is_a?(String) && !message.empty?
       true
     rescue StandardError => e
-      output.puts("FAIL")
-      output.puts("   #{e.message}")
+      output.puts(ui.colorizer.colorize(:error, "   #{e.message}"))
       false
     end
 

@@ -83,13 +83,13 @@ end
 def check_memory_streaming
   mem = ROOT.join("lib/devagent/session_memory.rb").exist?
   stream = ROOT.join("lib/devagent/streamer.rb").exist?
-  (mem && stream) ? ok("Session memory and streaming present") : warn("Missing session memory and/or streaming module")
+  mem && stream ? ok("Session memory and streaming present") : warn("Missing session memory and/or streaming module")
 end
 
 def check_cli
   exe = ROOT.join("exe/devagent").exist?
   cli = ROOT.join("lib/devagent/cli.rb").exist?
-  (exe || cli) ? ok("CLI entrypoints available") : bad("Missing CLI entrypoint (exe/devagent or lib/devagent/cli.rb)")
+  exe || cli ? ok("CLI entrypoints available") : bad("Missing CLI entrypoint (exe/devagent or lib/devagent/cli.rb)")
 end
 
 def check_specs
@@ -101,6 +101,22 @@ def check_git_safety
   files = Dir[ROOT.join("lib/devagent/**/*.rb")]
   safe = files.any? { |file| File.read(file).include?(".git/") }
   safe ? ok("Safety rules reference .git denylist") : warn("No explicit .git deny guard detected")
+end
+
+# Optional coverage check
+
+def check_test_coverage
+  last_run = ROOT.join("coverage/.last_run.json")
+  return warn("Coverage report not found. Run specs to generate SimpleCov data.") unless last_run.exist?
+
+  data = JSON.parse(last_run.read)
+  covered = data.dig("result", "covered_percent") || data.dig("result", "line")
+  return warn("Coverage percentage missing from report.") unless covered
+
+  message = format("SimpleCov coverage: %.2f%%", covered)
+  covered >= 80 ? ok(message) : bad(message)
+rescue JSON::ParserError => e
+  bad("Failed to parse coverage report: #{e.message}")
 end
 
 def run_audit
@@ -116,6 +132,7 @@ def run_audit
   check_cli
   check_specs
   check_git_safety
+  check_test_coverage
 end
 
 run_audit

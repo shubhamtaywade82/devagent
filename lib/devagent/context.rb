@@ -38,7 +38,7 @@ module Devagent
         "reviewer_model" => "gpt-4o",
         "embed_model" => "text-embedding-3-small",
         "ollama" => {
-          "host" => "http://172.29.128.1:11434",
+          "host" => "http://localhost:11434",
           "params" => {
             "temperature" => 0.2,
             "top_p" => 0.95

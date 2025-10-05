@@ -10,6 +10,7 @@ module Devagent
 
     def say(message)
       return if quiet? && message.to_s.strip.empty?
+
       output.puts(message)
       context.tracer.event("log", message: message)
       context.session_memory.append("assistant", message)

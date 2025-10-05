@@ -3,7 +3,15 @@
 RSpec.describe Devagent::Planner do
   subject(:planner) { described_class.new(context, streamer: streamer) }
 
-  let(:streamer) { instance_double(Devagent::Streamer) }
+  let(:tokens) { [] }
+  let(:streamer) do
+    instance_double(Devagent::Streamer).tap do |dbl|
+      allow(dbl).to receive(:with_stream) do |role, &block|
+        block.call(->(token) { tokens << token })
+        plan_json
+      end
+    end
+  end
   let(:index) { instance_double(Devagent::EmbeddingIndex, retrieve: []) }
   let(:session_memory) { instance_double(Devagent::SessionMemory, last_turns: []) }
   let(:tool_registry) do
@@ -39,8 +47,9 @@ RSpec.describe Devagent::Planner do
     allow(context).to receive(:provider_for).with(:reviewer).and_return("openai")
     allow(context).to receive(:provider_for).with(:embedding).and_return("openai")
     allow(context).to receive(:provider_for).and_return("openai")
-    allow(context).to receive(:query) do |role:, **kwargs|
+    allow(context).to receive(:query) do |role:, **kwargs, &block|
       if role == :planner
+        %w[{ plan }].each { |token| block&.call(token) }
         plan_json
       else
         review_json
@@ -54,14 +63,16 @@ RSpec.describe Devagent::Planner do
     expect(plan.confidence).to eq(0.9)
     expect(plan.summary).to eq("Implement feature")
     expect(plan.actions.length).to eq(1)
-    # streaming disabled; ensure plan parsed correctly
+    expect(streamer).to have_received(:with_stream).with(:planner)
+    expect(tokens).to include("{")
   end
 
   it "replans once when reviewer finds issues" do
     attempts = 0
-    allow(context).to receive(:query) do |role:, **kwargs|
+    allow(context).to receive(:query) do |role:, **kwargs, &block|
       if role == :planner
         attempts += 1
+        %w[{ plan }].each { |token| block&.call(token) }
         plan_json
       else
         attempts == 1 ? { "approved" => false, "issues" => ["Add tests"] }.to_json : review_json

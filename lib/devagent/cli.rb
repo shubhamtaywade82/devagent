@@ -4,6 +4,7 @@ require "thor"
 require_relative "context"
 require_relative "auto"
 require_relative "diagnostics"
+require_relative "ui"
 
 module Devagent
   # CLI exposes Thor commands for launching the agent and running diagnostics.

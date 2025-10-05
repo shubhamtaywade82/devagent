@@ -23,7 +23,7 @@ module Devagent
             "required" => ["type"],
             "properties" => {
               "type" => { "type" => "string" },
-              "args" => { "type" => ["object", "null"] }
+              "args" => { "type" => %w[object null] }
             }
           }
         }
@@ -38,7 +38,6 @@ module Devagent
         "issues" => { "type" => "array", "items" => { "type" => "string" } }
       }
     }.freeze
-
     def initialize(context, streamer: nil)
       @context = context
       @streamer = streamer
@@ -53,7 +52,10 @@ module Devagent
         raw_plan = generate_plan(task, feedback)
         payload = parse_plan(raw_plan)
         review = review_plan(task, raw_plan)
-        break Plan.new(summary: payload["summary"], actions: payload["actions"] || [], confidence: payload["confidence"].to_f) if review["approved"] || attempts >= 1
+        if review["approved"] || attempts >= 1
+          break Plan.new(summary: payload["summary"], actions: payload["actions"] || [],
+                         confidence: payload["confidence"].to_f)
+        end
 
         attempts += 1
         feedback = Array(review["issues"]).reject(&:empty?)

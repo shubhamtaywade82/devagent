@@ -48,7 +48,8 @@ RSpec.describe Devagent::CLI do
     allow(context).to receive(:model_for).with(:planner).and_return("gpt-4o")
     allow(context).to receive(:model_for).with(:developer).and_return("gpt-4o-mini")
     allow(context).to receive(:model_for).with(:reviewer).and_return("gpt-4o")
-    allow(context).to receive(:embedding_backend_info).and_return({ "provider" => "openai", "model" => "text-embedding-3-small" })
+    allow(context).to receive(:embedding_backend_info).and_return({ "provider" => "openai",
+                                                                    "model" => "text-embedding-3-small" })
     allow(context).to receive(:index).and_return(instance_double(Devagent::EmbeddingIndex, metadata: { "dim" => 1536 }))
     allow(context).to receive(:openai_available?).and_return(true)
 

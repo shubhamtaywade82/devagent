@@ -94,7 +94,9 @@ module Devagent
     end
 
     def default_test_command
-      context.plugins.filter_map { |plugin| plugin.respond_to?(:test_command) ? plugin.test_command(context) : nil }.first || "bundle exec rspec"
+      context.plugins.filter_map do |plugin|
+        plugin.respond_to?(:test_command) ? plugin.test_command(context) : nil
+      end.first || "bundle exec rspec"
     end
   end
 end

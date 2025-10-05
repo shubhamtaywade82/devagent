@@ -31,8 +31,6 @@ module Devagent
         payload = build_parameters(prompt, params: params, response_format: response_format)
         response = safe_chat(payload)
         fetch_content(response)
-        # rescue StandardError => e
-        #   raise Error, "OpenAI (model=#{model}) query failed: #{e.message}"
       end
 
       def stream(prompt, params: {}, response_format: nil, on_token: nil)
@@ -48,8 +46,6 @@ module Devagent
         payload[:stream] = handler
         safe_chat(payload)
         buffer
-        # rescue StandardError => e
-        #   raise Error, "OpenAI (model=#{model}) stream failed: #{e.message}"
       end
 
       def embed(texts, model: nil)
@@ -58,8 +54,6 @@ module Devagent
         response.fetch("data").map do |row|
           Array(row.fetch("embedding")).map(&:to_f)
         end
-        # rescue StandardError => e
-        #   raise Error, "OpenAI embeddings (model=#{model || embedding_model}) failed: #{e.message}"
       end
 
       private

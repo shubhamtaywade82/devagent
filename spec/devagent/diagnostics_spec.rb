@@ -40,7 +40,8 @@ RSpec.describe Devagent::Diagnostics do
     expect(diagnostics.run).to be(true)
 
     output.rewind
-    expect(output.string).to include("All checks passed.")
+    text = output.string.gsub(/\e\[[0-9;]*m/, "")
+    expect(text).to include("All checks passed")
   end
 
   it "returns false when a check fails" do
@@ -49,7 +50,7 @@ RSpec.describe Devagent::Diagnostics do
     expect(diagnostics.run).to be(false)
 
     output.rewind
-    expect(output.string).to include("FAIL").and include("connection refused")
+    expect(output.string).to include("connection refused")
   end
 end
 # rubocop:enable Metrics/BlockLength

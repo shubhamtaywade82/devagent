@@ -44,6 +44,3 @@ index:
   overlap: 200
 memory:
   short_term_turns: 20
-
-ui:
-  quiet: false

@@ -8,7 +8,7 @@ module Devagent
   module Ollama
     # Client wraps HTTP calls to the Ollama server for generation, streaming, and embeddings.
     class Client
-      DEFAULT_HOST = "http://172.29.128.1:11434"
+      DEFAULT_HOST = "http://localhost:11434"
 
       def initialize(config = {})
         host = config.fetch("host", DEFAULT_HOST)

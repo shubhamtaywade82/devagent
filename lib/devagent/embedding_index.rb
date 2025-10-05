@@ -17,7 +17,7 @@ module Devagent
       "threads" => 4
     }.freeze
 
-    META_FILENAME = "embeddings.meta.json".freeze
+    META_FILENAME = "embeddings.meta.json"
 
     Entry = Struct.new(:path, :chunk_index, :text, :embedding, keyword_init: true)
 
@@ -59,6 +59,7 @@ module Devagent
 
       store.upsert_many(embeddings.map { |entry| serialize(entry) }) unless embeddings.empty?
       persist_meta(current_backend.merge("dim" => Array(vectors.first).size)) if embeddings.any?
+
       embeddings
     end
 

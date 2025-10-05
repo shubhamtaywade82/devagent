@@ -47,6 +47,11 @@ Gem::Specification.new do |spec|
   spec.add_dependency "ruby-openai", "~> 5.0"
   spec.add_dependency "sqlite3", "~> 1.7"
   spec.add_dependency "thor", "~> 1.3"
+  spec.add_dependency "tty-config", "~> 0.5"
+  spec.add_dependency "tty-logger", "~> 0.6"
+  spec.add_dependency "tty-markdown", "~> 0.7"
+  spec.add_dependency "tty-progressbar", "~> 0.18"
+  spec.add_dependency "tty-prompt", "~> 0.23"
   spec.add_dependency "tty-reader", "~> 0.9"
   spec.add_dependency "zeitwerk", "~> 2.6"
 
@@ -54,4 +59,5 @@ Gem::Specification.new do |spec|
   spec.add_development_dependency "rake", "~> 13.2"
   spec.add_development_dependency "rspec", "~> 3.13"
   spec.add_development_dependency "rubocop", "~> 1.66"
+  spec.add_development_dependency "simplecov", "~> 0.22"
 end

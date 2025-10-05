@@ -62,4 +62,18 @@ RSpec.describe Devagent::EmbeddingIndex do
     expect(logger_messages.any? { |msg| msg.include?("Embedding backend changed") }).to be(true)
     expect(rebuilt_index.metadata["dim"]).to eq(2)
   end
+
+  it "clears the store when embedding dimensions change" do
+    context = StubEmbeddingContext.new(provider: "openai", dimension: 4)
+    index = described_class.new(repo, {}, context: context, logger: ->(msg) { logger_messages << msg })
+    index.build!
+
+    context.adapter = FakeEmbeddingAdapter.new(6)
+    rebuilt_index = described_class.new(repo, {}, context: context, logger: ->(msg) { logger_messages << msg })
+    expect(rebuilt_index.store).to receive(:clear!).at_least(:once).and_call_original
+
+    rebuilt_index.build!
+
+    expect(rebuilt_index.metadata["dim"]).to eq(6)
+  end
 end
