@@ -3,25 +3,45 @@
 module Devagent
   # Safety guards agent actions against disallowed file targets.
   class Safety
+    SYSTEM_DENY_REL = [%r{\A/}, %r{\A~}, %r{\A[a-zA-Z]:}, %r{\A\.\.}].freeze
+    SYSTEM_DENY_ABS = [%r{/\.rvm/}, %r{/\.gem/}, %r{/etc/}, %r{/usr/}].freeze
+
     def initialize(ctx)
       @repo = ctx.repo_path
-      @allow = ctx.config.dig("auto", "allowlist") || ["**/*"]
-      @deny = ctx.config.dig("auto", "denylist") || []
+      @allow = Array(ctx.config.dig("auto", "allowlist"))
+      @deny = Array(ctx.config.dig("auto", "denylist"))
+      @allow = ["**/*"] if @allow.empty?
     end
 
     def inside_repo?(relative_path)
-      full = File.expand_path(File.join(@repo, relative_path))
+      full = absolute_path(relative_path)
       repo_root = File.expand_path(@repo)
       prefix = repo_root.end_with?(File::SEPARATOR) ? repo_root : "#{repo_root}#{File::SEPARATOR}"
       full.start_with?(prefix)
     end
 
     def allowed?(relative_path)
+      return false if SYSTEM_DENY_REL.any? { |regex| relative_path.match?(regex) }
       return false unless inside_repo?(relative_path)
 
-      allowed = @allow.any? { |glob| File.fnmatch?(glob, relative_path, File::FNM_PATHNAME | File::FNM_EXTGLOB) }
-      denied = @deny.any? { |glob| File.fnmatch?(glob, relative_path, File::FNM_PATHNAME | File::FNM_EXTGLOB) }
+      absolute = absolute_path(relative_path)
+      return false if SYSTEM_DENY_ABS.any? { |regex| absolute.match?(regex) }
+
+      allowed = glob_match?(@allow, relative_path)
+      denied = glob_match?(@deny, relative_path)
       allowed && !denied
+    end
+
+    private
+
+    def glob_match?(patterns, relative_path)
+      patterns.any? do |glob|
+        File.fnmatch?(glob, relative_path, File::FNM_PATHNAME | File::FNM_EXTGLOB)
+      end
+    end
+
+    def absolute_path(relative_path)
+      File.expand_path(File.join(@repo, relative_path))
     end
   end
 end

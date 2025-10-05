@@ -1,0 +1,50 @@
+name: DevAgent Audit
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        provider: [openai, ollama]
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+
+      - name: Install Node (for front-end projects)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Bundle install
+        run: |
+          bundle config set path 'vendor/bundle'
+          bundle install --jobs 4 --retry 3
+
+      - name: Run repository audit
+        run: ruby script/audit_devagent.rb
+
+      - name: Verify OpenAI credentials present
+        if: matrix.provider == 'openai'
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "OPENAI_API_KEY missing"
+            exit 1
+          else
+            echo "OPENAI_API_KEY detected"
+          fi
+
+      - name: Run RSpec suite
+        run: bundle exec rspec
+
+      - name: Run RuboCop
+        run: bundle exec rubocop
