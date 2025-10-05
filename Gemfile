@@ -15,3 +15,7 @@ gem "rubocop-performance"
 gem "rubocop-rake"
 gem "rubocop-rspec"
 gem "bigdecimal"
+
+group :test do
+  gem "simplecov", "~> 0.22", require: false
+end

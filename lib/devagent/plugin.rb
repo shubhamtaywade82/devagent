@@ -29,6 +29,10 @@ module Devagent
       def commands
         {}
       end
+
+      def test_command(_ctx)
+        nil
+      end
     end
   end
 end

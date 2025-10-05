@@ -4,7 +4,6 @@ require_relative "../plugin"
 
 module Devagent
   module Plugins
-    # Rails plugin tunes prompts and helpers for Rails applications.
     module Rails
       extend Devagent::Plugin
 
@@ -16,25 +15,18 @@ module Devagent
         100
       end
 
-      def self.on_index(ctx)
-        ctx.index # (could add ignore rules here)
+      def self.on_load(context)
+        context.tracer.event("plugin", name: "rails")
       end
 
       def self.on_prompt(_ctx, _task)
-        <<~SYS
-          You are a senior Ruby on Rails engineer.
-          - Follow Rails MVC conventions and strong params.
-          - Ensure migrations are reversible.
-          - Generate/maintain RSpec tests under spec/.
-          - Return unified diffs for small edits, or whole file content for replacements.
-        SYS
+        <<~TEXT
+          You are working in a Ruby on Rails application. Follow MVC conventions, ensure migrations are reversible, and prefer RSpec for tests.
+        TEXT
       end
 
-      def self.on_action(ctx, name, _args = {})
-        case name
-        when "rails:test"
-          ctx.shell.call("bundle exec rspec --format documentation", chdir: ctx.repo_path)
-        end
+      def self.test_command(_ctx)
+        "bundle exec rspec"
       end
     end
   end

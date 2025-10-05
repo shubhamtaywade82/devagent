@@ -1,5 +1,15 @@
 # frozen_string_literal: true
 
+require "simplecov"
+
+SimpleCov.start do
+  enable_coverage :branch
+  add_filter "/spec/"
+  add_filter "/exe/"
+  add_filter "/bin/"
+  minimum_coverage 80
+end
+
 require "devagent"
 
 RSpec.configure do |config|
