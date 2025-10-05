@@ -19,9 +19,8 @@ module Devagent
     def allowed?(relative_path)
       return false unless inside_repo?(relative_path)
 
-      full_path = File.join(@repo, relative_path)
-      allowed = @allow.any? { |glob| File.fnmatch?(File.join(@repo, glob), full_path, File::FNM_PATHNAME | File::FNM_EXTGLOB) }
-      denied = @deny.any? { |glob| File.fnmatch?(File.join(@repo, glob), full_path, File::FNM_PATHNAME | File::FNM_EXTGLOB) }
+      allowed = @allow.any? { |glob| File.fnmatch?(glob, relative_path, File::FNM_PATHNAME | File::FNM_EXTGLOB) }
+      denied = @deny.any? { |glob| File.fnmatch?(glob, relative_path, File::FNM_PATHNAME | File::FNM_EXTGLOB) }
       allowed && !denied
     end
   end

@@ -46,12 +46,12 @@ module Devagent
     def check_index
       index = context.index
       index.build!
-      index.retrieve("diagnostic", limit: 1) # ensure retrieval executes without error
-      "indexed files: #{index.document_count}"
+      index.search("diagnostic", k: 1) # ensure retrieval executes without error
+      "indexed chunks: #{index.document_count}"
     end
 
     def check_ollama
-      response = context.llm.call("Respond with the single word READY.")
+      response = context.chat("Respond with the single word READY.")
       text = response.to_s.strip
       raise "Unexpected response from Ollama: #{response.inspect}" unless text.downcase.include?("ready")
 
