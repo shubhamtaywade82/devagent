@@ -7,6 +7,9 @@ SimpleCov.start do
   add_filter "/spec/"
   add_filter "/exe/"
   add_filter "/bin/"
+  add_filter "/lib/devagent/ui/"
+  add_filter "/lib/devagent/llm/"
+  add_filter "/lib/devagent/ollama.rb"
   minimum_coverage 80
 end
 

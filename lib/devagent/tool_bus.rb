@@ -58,6 +58,8 @@ module Devagent
       context.tracer.event("git_apply", patch: patch)
       return patch if dry_run?
 
+      return :skipped unless git_repo?
+
       IO.popen(["git", "-C", context.repo_path, "apply", "--whitespace=nowarn", "-"], "w") { |io| io.write(patch) }
       raise Error, "git apply failed" unless $CHILD_STATUS&.success?
 
@@ -87,6 +89,10 @@ module Devagent
     def guard_path!(relative_path)
       raise Error, "path required" if relative_path.to_s.empty?
       raise Error, "path not allowed: #{relative_path}" unless safety.allowed?(relative_path)
+    end
+
+    def git_repo?
+      File.directory?(File.join(context.repo_path, ".git"))
     end
 
     def dry_run?

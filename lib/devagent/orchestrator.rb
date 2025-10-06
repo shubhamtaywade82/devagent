@@ -19,10 +19,10 @@ module Devagent
 
     def run(task)
       context.session_memory.append("user", task)
-      context.index.build!
+      with_spinner("Indexing") { context.index.build! }
       return answer_unactionable(task, 1.0) if qna?(task)
 
-      plan = planner.plan(task)
+      plan = with_spinner("Planning") { planner.plan(task) }
       context.tracer.event("plan", summary: plan.summary, confidence: plan.confidence, actions: plan.actions)
       streamer.say("Plan: #{plan.summary} (#{(plan.confidence * 100).round}%)") if plan.summary && !quiet?
       return answer_unactionable(task, plan.confidence) if plan.actions.empty?
@@ -34,7 +34,7 @@ module Devagent
         execute_actions(plan.actions)
         break unless retry_needed?(iteration, task, plan.confidence)
 
-        plan = planner.plan(task)
+        plan = with_spinner("Planning") { planner.plan(task) }
       end
     end
 
@@ -52,7 +52,7 @@ module Devagent
 
     def retry_needed?(iteration, task, confidence)
       if context.tool_bus.changes_made? && should_run_tests?
-        result = run_tests
+        result = with_spinner("Running tests") { run_tests }
         return false if result == :ok
 
         if result == :skipped
@@ -67,7 +67,7 @@ module Devagent
       end
 
       unless context.tool_bus.changes_made?
-        streamer.say("No changes detected; answering directly.", level: :warn) unless quiet?
+        streamer.say("No changes detected; answering directly.") unless quiet?
         answer_unactionable(task, confidence)
       end
       false
@@ -97,13 +97,17 @@ module Devagent
     def answer_unactionable(task, confidence)
       streamer.say("Answer:") unless quiet?
       prompt = build_answer_prompt(task)
-      answer = context.query(
-        role: :developer,
-        prompt: prompt,
-        stream: false
-      )
+      answer = with_spinner("Answering") do
+        context.query(
+          role: :developer,
+          prompt: prompt,
+          stream: false
+        )
+      end
       streamer.say(answer.to_s.strip, markdown: true)
-    rescue StandardError => e
+    rescue Exception => e
+      raise if e.is_a?(Interrupt)
+
       streamer.say("Answering failed: #{e.message}") unless quiet?
     end
 
@@ -112,11 +116,11 @@ module Devagent
     end
 
     def build_answer_prompt(task)
-      retrieved = context.index.retrieve(task, limit: 6).map do |snippet|
+      retrieved = safe_index_retrieve(task, limit: 6).map do |snippet|
         "#{snippet["path"]}:\n#{snippet["text"]}\n---"
       end.join("\n")
 
-      history = context.session_memory.last_turns(6).map do |turn|
+      history = safe_session_history(limit: 6).map do |turn|
         "#{turn["role"]}: #{turn["content"]}"
       end.join("\n")
 
@@ -147,6 +151,32 @@ module Devagent
       return false if action_words.any? { |w| text.include?(" #{w} ") || text.start_with?(w) }
 
       false
+    end
+
+    def safe_index_retrieve(task, limit: 6)
+      context.index.retrieve(task, limit: limit)
+    rescue Exception => e
+      raise if e.is_a?(Interrupt)
+
+      context.tracer.event("index_retrieve_failed", message: e.message)
+      []
+    end
+
+    def safe_session_history(limit: 6)
+      context.session_memory.last_turns(limit)
+    rescue Exception => e
+      raise if e.is_a?(Interrupt)
+
+      context.tracer.event("session_history_failed", message: e.message)
+      []
+    end
+
+    def with_spinner(label)
+      if ui&.respond_to?(:spinner)
+        ui.spinner(label).run { yield }
+      else
+        yield
+      end
     end
   end
 end

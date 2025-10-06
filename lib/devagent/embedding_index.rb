@@ -45,6 +45,9 @@ module Devagent
       vectors = embed_many(chunk_texts)
       return [] if vectors.empty?
 
+      vector_dim = Array(vectors.first).size
+      ensure_dimension_consistency!(vector_dim)
+
       chunks.each_with_index do |chunk, idx|
         vector = vectors[idx]
         next unless valid_vector?(vector)
@@ -58,7 +61,7 @@ module Devagent
       end
 
       store.upsert_many(embeddings.map { |entry| serialize(entry) }) unless embeddings.empty?
-      persist_meta(current_backend.merge("dim" => Array(vectors.first).size)) if embeddings.any?
+      persist_meta(current_backend.merge("dim" => vector_dim)) if embeddings.any?
 
       embeddings
     end
@@ -173,6 +176,15 @@ module Devagent
       return if saved["provider"] == backend["provider"] && saved["model"] == backend["model"]
 
       logger.call("Embedding backend changed (#{saved["provider"]}/#{saved["model"]} -> #{backend["provider"]}/#{backend["model"]}). Rebuilding index…")
+      store.clear!
+      FileUtils.rm_f(meta_path)
+    end
+
+    def ensure_dimension_consistency!(dimension)
+      saved = load_meta
+      return unless saved && saved["dim"] && saved["dim"] != dimension
+
+      logger.call("Embedding dimension changed (#{saved["dim"]} -> #{dimension}). Rebuilding index…")
       store.clear!
       FileUtils.rm_f(meta_path)
     end

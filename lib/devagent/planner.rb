@@ -73,6 +73,8 @@ module Devagent
     def generate_plan(task, feedback)
       prompt = build_prompt(task, feedback)
       response_format = json_schema_format(PLAN_SCHEMA) if context.provider_for(:planner) == "openai"
+      return stream_plan(prompt, response_format) if streamer
+
       context.query(
         role: :planner,
         prompt: prompt,
@@ -170,6 +172,24 @@ module Devagent
         Proposed plan JSON:
         #{raw_plan}
       PROMPT
+    end
+
+    def stream_plan(prompt, response_format)
+      streamer.with_stream(:planner) do |push|
+        raw = context.query(
+          role: :planner,
+          prompt: prompt,
+          stream: false,
+          response_format: response_format,
+          params: { temperature: 0.1 }
+        )
+
+        if push
+          raw.each_char { |char| push.call(char) }
+        end
+
+        raw
+      end
     end
 
     def json_schema_format(schema)
