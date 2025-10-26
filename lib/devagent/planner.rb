@@ -175,7 +175,7 @@ module Devagent
     end
 
     def stream_plan(prompt, response_format)
-      streamer.with_stream(:planner) do |push|
+      streamer.with_stream(:planner, markdown: false, silent: true) do |push|
         raw = context.query(
           role: :planner,
           prompt: prompt,

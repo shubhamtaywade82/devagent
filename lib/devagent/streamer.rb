@@ -26,25 +26,29 @@ module Devagent
       context.session_memory.append("assistant", message)
     end
 
-    def with_stream(role, markdown: true)
+    def with_stream(role, markdown: true, silent: false)
       buffer = +""
-      use_markdown = markdown && markdown_renderer
+      use_markdown = !silent && markdown && markdown_renderer
       handler = proc do |chunk|
         chunk_str = chunk.to_s
         buffer << chunk_str
+        record_token(role, chunk_str)
+        next if silent
+
         if use_markdown
           markdown_renderer.render_stream(buffer)
-          record_token(role, chunk_str)
         else
           token(role, chunk_str)
         end
       end
       result = yield handler
       final = result.nil? || result.to_s.empty? ? buffer : result.to_s
-      if use_markdown
-        markdown_renderer.render_final(final)
-      else
-        output.puts unless final.end_with?("\n")
+      unless silent
+        if use_markdown
+          markdown_renderer.render_final(final)
+        else
+          output.puts unless final.end_with?("\n")
+        end
       end
       context.tracer.event("log", message: final, level: :info)
       context.session_memory.append("assistant", final)
