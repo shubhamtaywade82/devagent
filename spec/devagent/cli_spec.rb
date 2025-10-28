@@ -52,6 +52,7 @@ RSpec.describe Devagent::CLI do
                                                                     "model" => "text-embedding-3-small" })
     allow(context).to receive(:index).and_return(instance_double(Devagent::EmbeddingIndex, metadata: { "dim" => 1536 }))
     allow(context).to receive(:openai_available?).and_return(true)
+    allow(context).to receive(:openai_uri_base).and_return("https://api.openai.com/v1")
 
     expect { described_class.start(["diag"]) }.not_to raise_error
   end

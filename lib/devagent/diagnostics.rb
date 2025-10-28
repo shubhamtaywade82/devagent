@@ -56,7 +56,9 @@ module Devagent
     end
 
     def check_configuration
-      "provider: #{context.resolved_provider}, models: #{model_summary}, #{plugin_summary}"
+      uri_base = context.respond_to?(:openai_uri_base) ? context.openai_uri_base : default_openai_uri
+      key_status = context.openai_available? ? "yes" : "no"
+      "provider: #{context.resolved_provider}, openai uri_base: #{uri_base}, key present: #{key_status}, models: #{model_summary}, #{plugin_summary}"
     end
 
     def check_index
@@ -95,6 +97,10 @@ module Devagent
     def plugin_summary
       names = Array(context.plugins).map { |plugin| plugin.name.to_s.split("::").last }.reject(&:empty?)
       names.empty? ? "no plugins detected" : "plugins: #{names.join(", ")}"
+    end
+
+    def default_openai_uri
+      "https://api.openai.com/v1"
     end
 
     def connectivity_checks

@@ -45,9 +45,16 @@ module Devagent
           }
         },
         "openai" => {
+          "uri_base" => "https://api.openai.com/v1",
+          "api_key_env" => "OPENAI_API_KEY",
+          "request_timeout" => 600,
           "params" => {
             "temperature" => 0.2,
             "top_p" => 0.95
+          },
+          "options" => {
+            "num_gpu" => 0,
+            "num_ctx" => 2048
           }
         },
         "index" => {
@@ -148,22 +155,26 @@ module Devagent
     end
 
     def llm_params(provider)
-      params =
-        case provider
-        when "openai"
-          config.dig("openai", "params")
-        else
-          config.dig("ollama", "params")
-        end
-      symbolize_keys(params || {})
+      base = config.dig("ollama", "params") || {}
+      overlay = provider == "openai" ? config.dig("openai", "params") || {} : {}
+      symbolize_keys(base.merge(overlay))
     end
 
     def openai_api_key
-      ENV["OPENAI_API_KEY"] || config.dig("openai", "api_key")
+      openai = config["openai"] || {}
+      env_key = openai["api_key_env"] || "OPENAI_API_KEY"
+      key = ENV[env_key]
+      key = config.dig("openai", "api_key") if key.to_s.empty?
+      key = "ollama" if key.to_s.empty? && !openai_uri_base.match?(/api\.openai\.com/i)
+      key
     end
 
     def openai_available?
       !openai_api_key.to_s.strip.empty?
+    end
+
+    def openai_uri_base
+      config.dig("openai", "uri_base") || "https://api.openai.com/v1"
     end
 
     def llm_for(role)
@@ -204,7 +215,8 @@ module Devagent
       providers = %i[default planner developer reviewer tester embedding].map { |role| provider_for(role) }.uniq
       return unless providers.include?("openai") && !openai_available?
 
-      raise Error, "OpenAI provider requested but OPENAI_API_KEY is not set"
+      env_key = config.dig("openai", "api_key_env") || "OPENAI_API_KEY"
+      raise Error, "OpenAI provider requested but credentials are missing (set #{env_key} or openai.api_key)"
     end
 
     def resolve_provider(raw)
