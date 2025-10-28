@@ -32,6 +32,8 @@ RSpec.describe Devagent::Diagnostics do
     allow(context).to receive(:model_for).with(:developer).and_return("llama2")
     allow(context).to receive(:model_for).with(:reviewer).and_return("llama2")
     allow(context).to receive(:provider_for).and_return("ollama")
+    allow(context).to receive(:openai_uri_base).and_return("https://api.openai.com/v1")
+    allow(context).to receive(:openai_available?).and_return(false)
     allow(context).to receive(:query).and_return("READY")
     allow(index).to receive(:search).and_return([])
   end

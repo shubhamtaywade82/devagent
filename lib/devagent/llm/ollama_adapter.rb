@@ -27,9 +27,10 @@ module Devagent
         raise Error, "Ollama (model=#{model}) query failed: #{e.message}"
       end
 
-      def stream(prompt, params: {}, response_format: nil, on_token: nil)
+      def stream(prompt, params: {}, response_format: nil, on_token: nil, &block)
         ensure_no_response_format!(response_format)
         buffer = +""
+        handler = on_token || block
         client.stream(
           prompt: prompt,
           model: model,
@@ -38,7 +39,7 @@ module Devagent
           next if token.nil?
 
           text = token.to_s
-          on_token&.call(text)
+          handler&.call(text)
           buffer << text
         end
         buffer

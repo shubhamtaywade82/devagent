@@ -1,4 +1,4 @@
-provider: openai
+provider: auto
 model: "gpt-4o-mini"
 planner_model: "gpt-4o-mini"
 developer_model: "gpt-4o-mini"
@@ -10,9 +10,15 @@ ollama:
     temperature: 0.2
     top_p: 0.95
 openai:
+  uri_base: "https://api.openai.com/v1"
+  api_key_env: "OPENAI_API_KEY"
+  request_timeout: 600
   params:
     temperature: 0.2
     top_p: 0.95
+  options:
+    num_gpu: 0
+    num_ctx: 2048
 auto:
   max_iterations: 3
   dry_run: false

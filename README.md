@@ -35,6 +35,16 @@ planner_model: gpt-4o-mini
 developer_model: gpt-4o-mini
 reviewer_model: gpt-4o
 embed_model: text-embedding-3-small
+openai:
+  uri_base: "https://api.openai.com/v1" # Point to Ollama's /v1 to proxy through ruby-openai
+  api_key_env: "OPENAI_API_KEY"
+  request_timeout: 600
+  params:
+    temperature: 0.2
+    top_p: 0.95
+  options:
+    num_gpu: 0
+    num_ctx: 2048
 ollama:
   host: "http://localhost:11434"
   params:
@@ -83,6 +93,7 @@ memory:
 
 - `script/audit_devagent.rb` — static audit that checks repository structure and configuration, printing ✅/⚠️/❌ status.
 - `script/smoke.rb` — runs a lightweight LLM smoke test using the configured planner adapter.
+- `script/ollama_openai_smoke.rb` — verifies ruby-openai connectivity in both non-streaming and streaming modes.
 
 Run the audit locally:
 
@@ -98,6 +109,9 @@ OPENAI_API_KEY=sk-... ruby script/smoke.rb
 
 # Ollama (ensure `ollama serve` is running)
 ruby script/smoke.rb
+
+# Ollama via OpenAI-compatible endpoint
+OPENAI_API_KEY=ollama ruby script/ollama_openai_smoke.rb
 ```
 
 ## Requirements
