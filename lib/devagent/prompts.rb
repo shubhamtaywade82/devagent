@@ -2,7 +2,7 @@
 
 module Devagent
   module Prompts
-    INTENT_SYSTEM = <<~PROMPT.freeze
+    INTENT_SYSTEM = <<~PROMPT
       You are an intent classifier for a local dev agent CLI.
       Classify whether the user's message requires repository tools (edit/debug/review)
       or should be answered directly (explanation/general).
@@ -14,7 +14,7 @@ module Devagent
       }
     PROMPT
 
-    PLANNER_SYSTEM = <<~PROMPT.freeze
+    PLANNER_SYSTEM = <<~PROMPT
       You are a software planning engine.
       You do NOT execute actions. You only produce a structured plan.
 
@@ -29,8 +29,17 @@ module Devagent
 
       IMPORTANT: Before running any command you're not certain about:
       1. First use check_command_help with the base command (e.g., "rubocop") to see available flags
-      2. Review the help output to understand correct syntax
-      3. Then use run_command with the correct flags based on the help output
+      2. Review the help output provided in controller observations to understand correct syntax
+      3. Use ONLY the flags and options shown in the help output - do not guess or use flags not listed
+      4. Then use run_command with the correct flags based on the help output
+
+      If controller observations include "Command help checked", you MUST use the help output provided
+      to construct the correct command. Do not use flags that are not shown in the help output.
+
+      For simple command-checking tasks (like "is this app rubocop offenses free?"):
+      - Use check_command_help first to get command syntax
+      - Then run_command with correct flags
+      - Set confidence to at least 0.7 if you have the help output, or 0.5 if you're certain about the command syntax
 
       Common command examples for run_command:
       - RuboCop: "rubocop" or "bundle exec rubocop" (check help first for available flags)
@@ -61,7 +70,7 @@ module Devagent
       }
     PROMPT
 
-    DIFF_SYSTEM = <<~PROMPT.freeze
+    DIFF_SYSTEM = <<~PROMPT
       Given ORIGINAL content and TARGET intent, produce a unified diff.
 
       Rules:
@@ -75,7 +84,7 @@ module Devagent
       - Include @@ hunk headers with context.
     PROMPT
 
-    DECISION_SYSTEM = <<~PROMPT.freeze
+    DECISION_SYSTEM = <<~PROMPT
       Given:
       - plan
       - step results
@@ -90,18 +99,18 @@ module Devagent
       }
     PROMPT
 
-    PLANNER_REVIEW_SYSTEM = <<~PROMPT.freeze
+    PLANNER_REVIEW_SYSTEM = <<~PROMPT
       You are the senior reviewer validating an autonomous plan.
       Respond only in JSON with shape:
       {"approved": boolean, "issues": [string, ...]}
       Issues must be actionable blockers. Approve only if the plan is safe and minimal.
     PROMPT
 
-    DEVELOPER_SYSTEM = <<~PROMPT.freeze
+    DEVELOPER_SYSTEM = <<~PROMPT
       You are a senior developer executing the approved plan. Use the available tools carefully and respect repository conventions.
     PROMPT
 
-    TESTER_SYSTEM = <<~PROMPT.freeze
+    TESTER_SYSTEM = <<~PROMPT
       You are the test engineer. Ensure adequate automated test coverage and that the suite passes. Prefer RSpec/Jest when detected.
     PROMPT
   end

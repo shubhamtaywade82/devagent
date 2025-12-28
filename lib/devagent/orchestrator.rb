@@ -78,6 +78,14 @@ module Devagent
           end
 
           if plan.steps.empty?
+            # If plan is empty but we have a command-checking question, try to help
+            if question_requires_command?(task) && plan.confidence.to_f < 0.3
+              streamer.say("Planning failed. Trying direct command execution...", level: :warn) unless quiet?
+              # For simple command questions, create a minimal plan
+              state.plan = create_minimal_command_plan(task)
+              state.phase = :execution
+              next
+            end
             state.phase = :done
             answer_unactionable(task, plan.confidence)
             next
@@ -221,8 +229,10 @@ module Devagent
       when "git_apply"
         state.record_patch_applied
       when "check_command_help"
+        # result is the help output string from the command
+        help_text = result.is_a?(String) ? result : result.to_s
         state.record_observation({ "type" => "COMMAND_HELP_CHECKED", "command" => args["command"],
-                                   "help_output" => result })
+                                   "help_output" => help_text })
       when "run_command"
         state.record_command(args["command"])
       when "run_tests"
@@ -374,6 +384,14 @@ module Devagent
       recent = state.observations.last(8)
       errs = state.errors.last(2)
       parts = []
+
+      # Include help output if it was checked - this is critical for command execution
+      help_observations = recent.select { |o| o["type"] == "COMMAND_HELP_CHECKED" }
+      help_observations.each do |obs|
+        parts << "Command help checked for: #{obs["command"]}"
+        parts << "Help output:\n#{obs["help_output"]}\n---"
+      end
+
       parts << "Recent observations: #{recent.map { |o| o["type"] }.join(", ")}" unless recent.empty?
       parts << "Recent errors: #{errs.map { |e| e["signature"] }.join(", ")}" unless errs.empty?
       parts.join("\n")
@@ -448,7 +466,11 @@ module Devagent
     end
 
     def validate_plan!(state, plan, visible_tools:)
-      raise Error, "plan confidence too low" if plan.confidence.to_f < 0.5
+      # For command-only plans (checking tools like rubocop), allow lower confidence
+      # since these are straightforward tasks
+      has_commands = plan.steps.any? { |s| %w[run_command run_tests check_command_help].include?(s["action"].to_s) }
+      min_confidence = has_commands ? 0.3 : 0.5
+      raise Error, "plan confidence too low" if plan.confidence.to_f < min_confidence
 
       allowed = Array(visible_tools).map(&:name)
       # Also check all tools in registry (for run_command/run_tests that might not be in visible_tools)
@@ -570,6 +592,53 @@ module Devagent
         /\brun\s+(rubocop|test|spec|rspec|bundle|make)/i
       ]
       command_indicators.any? { |pattern| text.match?(pattern) }
+    end
+
+    def create_minimal_command_plan(task)
+      # Create a simple plan for command-checking questions when planner fails
+      text = task.to_s.strip.downcase
+
+      # Determine which command to run
+      base_command = if text.include?("rubocop")
+                       "rubocop"
+                     elsif text.match?(/\b(test|spec|rspec)\b/i)
+                       "rspec"
+                     else
+                       nil
+                     end
+
+      return nil unless base_command
+
+      steps = [
+        {
+          "step_id" => 1,
+          "action" => "check_command_help",
+          "command" => base_command,
+          "path" => nil,
+          "reason" => "Check command help to understand correct syntax",
+          "depends_on" => []
+        },
+        {
+          "step_id" => 2,
+          "action" => "run_command",
+          "command" => base_command == "rspec" ? "bundle exec rspec" : "bundle exec #{base_command}",
+          "path" => nil,
+          "reason" => "Run command to check status",
+          "depends_on" => [1]
+        }
+      ]
+
+      Plan.new(
+        plan_id: "minimal_#{Time.now.to_i}",
+        goal: task,
+        assumptions: ["Using minimal plan due to planner failure"],
+        steps: steps,
+        success_criteria: ["Command executed successfully"],
+        rollback_strategy: "None needed for read-only command",
+        confidence: 0.6,
+        summary: task,
+        actions: []
+      )
     end
 
     def get_directory_structure(max_depth: 3)

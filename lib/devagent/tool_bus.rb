@@ -119,8 +119,9 @@ module Devagent
 
     def check_command_help(args)
       command = args.fetch("command")
-      # Extract base command (before any flags)
-      base_cmd = command.split.first || command
+      # Extract base command (before any flags or help flags)
+      # Remove common help flags if present
+      base_cmd = command.split.reject { |part| %w[--help -h help].include?(part) }.first || command.split.first || command
 
       context.tracer.event("check_command_help", command: base_cmd)
       return "skipped" if dry_run?
