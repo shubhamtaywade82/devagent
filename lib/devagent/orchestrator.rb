@@ -306,11 +306,15 @@ module Devagent
         cmd_args = Array(args["args"]).map(&:to_s)
         command_str = [program, *cmd_args].join(" ")
         state.record_command(command_str)
+        # For status-checking commands (like rubocop, tests), include more output lines
+        # to capture all the details (offenses, test results, etc.)
+        is_status_check = command_str.match?(/\b(rubocop|rspec|test|spec|lint)\b/i)
+        output_lines = is_status_check ? 100 : 20
         state.record_observation({
                                    "type" => "COMMAND_EXECUTED",
                                    "command" => command_str,
-                                   "stdout" => truncate_output(result["stdout"].to_s, lines: 20),
-                                   "stderr" => truncate_output(result["stderr"].to_s, lines: 20),
+                                   "stdout" => truncate_output(result["stdout"].to_s, lines: output_lines),
+                                   "stderr" => truncate_output(result["stderr"].to_s, lines: output_lines),
                                    "exit_code" => result["exit_code"].to_i
                                  })
       when "diagnostics.error_summary"
@@ -493,6 +497,7 @@ module Devagent
       <<~PROMPT
         You are a concise, helpful developer assistant.
         Answer the user's question based on the command output provided below.
+        Include specific details from the command output in your answer (file names, line numbers, error messages, warnings, etc.).
 
         Recent conversation:
         #{history}
@@ -502,6 +507,8 @@ module Devagent
 
         Question:
         #{task}
+
+        Provide a detailed answer that includes all relevant information from the command output above.
       PROMPT
     end
 
@@ -632,10 +639,10 @@ module Devagent
       # For read-only plans (EXPLANATION questions that just need to read files), also allow lower confidence
       has_only_reads = plan.steps.all? { |s| %w[fs.read fs_read].include?(s["action"].to_s) } && !plan.steps.empty?
       min_confidence = if has_commands || has_only_reads
-                        0.3
-                      else
-                        0.5
-                      end
+                         0.3
+                       else
+                         0.5
+                       end
       raise Error, "plan confidence too low" if plan.confidence.to_f < min_confidence
 
       allowed = Array(visible_tools).map(&:name)
@@ -744,8 +751,21 @@ module Devagent
         "explain this repo", "explain this repository", "explain this project",
         "read", "show me", "what files", "what's in", "list files"
       ]
-      file_access_indicators.any? { |keyword| text.include?(keyword) } &&
-        question_about_repo?(task)
+
+      # Questions about specific classes/components in the repository need file access
+      # e.g., "explain how ToolRegistry works" - needs to read the actual code
+      code_component_indicators = [
+        "explain how", "how does", "how do", "how is", "how are",
+        "what is", "what does", "what do"
+      ]
+      mentions_code_component = code_component_indicators.any? { |keyword| text.include?(keyword) } &&
+                                (text.match?(/\b(class|module|function|method|component|system|registry|tool|agent|planner|orchestrator)\b/i) ||
+                                 text.match?(/\b[A-Z][a-zA-Z]+\b/)) # Capitalized words likely refer to classes
+
+      general_file_access = file_access_indicators.any? { |keyword| text.include?(keyword) } &&
+                            question_about_repo?(task)
+
+      general_file_access || mentions_code_component
     end
 
     def question_about_directory_structure?(task)
@@ -788,16 +808,27 @@ module Devagent
 
       return nil unless base_command
 
-      steps = [
-        {
-          "step_id" => 1,
-          "action" => "exec.run",
-          "command" => base_command == "rspec" ? "bundle exec rspec" : "bundle exec #{base_command}",
-          "path" => nil,
-          "reason" => "Run command to check status",
-          "depends_on" => []
-        }
-      ]
+      # For status-checking questions (e.g., "is it free?", "does it pass?"),
+      # accept non-zero exit codes since we're checking status, not requiring success
+      is_status_check = text.match?(/\b(is|are|does|do|can|will)\s+(this|the|it|app|code)\s+/i) ||
+                        text.include?("free") || text.include?("offenses") || text.include?("violations")
+
+      step = {
+        "step_id" => 1,
+        "action" => "exec.run",
+        "command" => base_command == "rspec" ? "bundle exec rspec" : "bundle exec #{base_command}",
+        "path" => nil,
+        "reason" => "Run command to check status",
+        "depends_on" => []
+      }
+
+      # For status checks, accept exit codes 0 and 1 (success and found issues)
+      # This prevents the step from being marked as "failed" when we successfully got the status
+      if is_status_check
+        step["accepted_exit_codes"] = [0, 1]
+      end
+
+      steps = [step]
 
       Plan.new(
         plan_id: "minimal_#{Time.now.to_i}",

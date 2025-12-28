@@ -10,7 +10,7 @@ module Devagent
   def self.loader
     @loader ||= Zeitwerk::Loader.for_gem.tap do |loader|
       loader.ignore("#{__dir__}/devagent/version.rb")
-      loader.inflector.inflect("cli" => "CLI")
+      loader.inflector.inflect("cli" => "CLI", "ui" => "UI")
       loader.setup
     end
   end

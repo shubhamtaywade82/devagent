@@ -34,6 +34,13 @@ auto:
   dry_run: false
   require_tests_green: true
   confirmation_threshold: 0.7
+  command_allowlist:
+    - "bundle"
+    - "ruby"
+    - "rubocop"
+    - "rake"
+    - "rspec"
+    - "make"
   allowlist:
     - "app/**"
     - "lib/**"

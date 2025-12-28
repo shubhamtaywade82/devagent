@@ -3,6 +3,7 @@
 require "thor"
 require_relative "context"
 require_relative "auto"
+require_relative "orchestrator"
 require_relative "diagnostics"
 require_relative "ui"
 
@@ -22,9 +23,26 @@ module Devagent
     end
 
     # Default task: start the REPL when invoked without a subcommand
-    desc "start", "Start autonomous REPL (default)"
-    def start(*_args)
+    # If a prompt is provided as an argument, execute it directly and exit
+    desc "start [PROMPT]", "Start autonomous REPL (default) or execute a single prompt"
+    def start(*args)
       ctx = build_context
+
+      # If a prompt is provided, execute it directly and exit
+      if args.any? && !args.first.nil? && !args.first.strip.empty?
+        prompt = args.join(" ").strip
+        ui = UI::Toolkit.new(output: $stdout, input: $stdin)
+        orchestrator = Orchestrator.new(ctx, output: $stdout, ui: ui)
+        begin
+          orchestrator.run(prompt)
+        rescue StandardError => e
+          say("Error: #{e.message}", :red)
+          exit 1
+        end
+        return
+      end
+
+      # Otherwise, start the REPL
       Auto.new(ctx, input: $stdin, output: $stdout).repl
     end
 

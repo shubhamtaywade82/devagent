@@ -8,4 +8,29 @@ rescue LoadError
 end
 
 require_relative "../lib/devagent"
-Devagent::CLI.start(ARGV)
+
+# Check if first non-option argument is a known command
+known_commands = %w[diag config test start help]
+first_non_option = ARGV.find { |arg| !arg.start_with?("-") }
+
+# If first non-option argument is not a known command, treat all non-option args as a prompt
+if first_non_option && !known_commands.include?(first_non_option)
+  # Extract prompt from non-option arguments
+  prompt_parts = ARGV.reject { |arg| arg.start_with?("-") }
+  prompt = prompt_parts.join(" ")
+
+  # For now, use default context (options can be added later if needed)
+  # Users can still use environment variables or .devagent.yml for configuration
+  ctx = Devagent::Context.build(Dir.pwd, {})
+  ui = Devagent::UI::Toolkit.new(output: $stdout, input: $stdin)
+  orchestrator = Devagent::Orchestrator.new(ctx, output: $stdout, ui: ui)
+  begin
+    orchestrator.run(prompt)
+  rescue StandardError => e
+    warn("Error: #{e.message}")
+    exit 1
+  end
+else
+  # Normal Thor command processing (handles options properly)
+  Devagent::CLI.start(ARGV)
+end

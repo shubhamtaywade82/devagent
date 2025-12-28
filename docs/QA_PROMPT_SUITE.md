@@ -58,12 +58,14 @@ git diff
 
 **Expected**
 - **EXPLANATION** intent
-- ❌ No indexing (conceptual question, not repo-specific)
-- ❌ No filesystem access (`fs.read` / `exec.run`)
-- ✅ Answer references concepts (schemas, phase gating, dependencies) from general knowledge or session history
-- ❌ No diffs, no commands
+- ✅ Goes through planning phase (question about a specific component in this repository)
+- ✅ LLM should plan to read the ToolRegistry code file (`lib/devagent/tool_registry.rb`)
+- ✅ `fs.read` of relevant source files expected
+- ✅ Answer should reference actual implementation details (schemas, phase gating, validation) from the code
+- ❌ No `exec.run` (commands not needed)
+- ✅ No files modified
 
-**Note**: For conceptual questions that don't require repository-specific context, no indexing or file access is needed.
+**Note**: Questions about specific classes/components in the repository (like "explain how ToolRegistry works") should read the actual code files to provide accurate answers, not rely on general knowledge or hallucinations.
 
 ---
 
