@@ -1,18 +1,18 @@
-provider: auto
-# Default models (OpenAI)
-model: "gpt-4o-mini"
-planner_model: "gpt-4o-mini"
-developer_model: "gpt-4o-mini"
-reviewer_model: "gpt-4o"
-embed_model: "text-embedding-3-small"
+provider: ollama
+# Default models (Ollama)
+model: "llama3.2:3b"
+planner_model: "llama3.2:3b"
+developer_model: "llama3.2:3b"
+reviewer_model: "llama3.1:8b-instruct-q4_K_M"
+embed_model: "nomic-embed-text"
 
-# Ollama models (use with --provider ollama)
-# Uncomment to use Ollama models by default:
-# model: "llama3.2:3b"
-# planner_model: "llama3.2:3b"
-# developer_model: "llama3.2:3b"
-# reviewer_model: "llama3.1:8b"
-# embed_model: "nomic-embed-text"
+# OpenAI models (use with --provider openai)
+# Uncomment to use OpenAI models by default:
+# model: "gpt-4o-mini"
+# planner_model: "gpt-4o-mini"
+# developer_model: "gpt-4o-mini"
+# reviewer_model: "gpt-4o"
+# embed_model: "text-embedding-3-small"
 ollama:
   host: "http://localhost:11434"
   params:
