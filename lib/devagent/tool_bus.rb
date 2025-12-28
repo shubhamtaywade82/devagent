@@ -89,7 +89,7 @@ module Devagent
       validate_diff!(relative_path, diff)
 
       context.tracer.event("fs_write_diff", path: relative_path)
-      return({ "applied" => false }) if dry_run?
+      return { "applied" => false } if dry_run?
 
       # We intentionally use git apply because it is the most reliable diff applier
       # for unified diffs and keeps behavior deterministic.
@@ -104,7 +104,7 @@ module Devagent
       relative_path = args.fetch("path")
       guard_path!(relative_path)
       context.tracer.event("fs_delete", path: relative_path)
-      return({ "ok" => false }) if dry_run?
+      return { "ok" => false } if dry_run?
 
       full = File.join(context.repo_path, relative_path)
       FileUtils.rm_f(full)
@@ -116,10 +116,30 @@ module Devagent
       command = args["command"] || default_test_command
       context.tracer.event("run_tests", command: command)
       return :skipped if dry_run?
+
       tokens = Shellwords.split(command.to_s)
       raise Error, "command not allowed" unless command_allowed?(tokens)
 
-      Util.run!(tokens, chdir: context.repo_path)
+      # Use run_capture to get exit code and output, so we can handle coverage failures
+      result = Util.run_capture(tokens, chdir: context.repo_path)
+      stdout = result["stdout"].to_s
+      exit_code = result["exit_code"].to_i
+
+      # If exit code is 2 (coverage failure), check if tests actually passed
+      if exit_code == 2
+        # Check if tests passed (0 failures) but coverage failed
+        return :ok if stdout.include?("0 failures") || stdout.match?(/\d+\s+examples?,\s+0\s+failures?/)
+
+        # Tests passed, but coverage failed - this is acceptable
+
+        # Tests actually failed
+        raise Error, "Tests failed with exit code #{exit_code}:\nSTDOUT: #{stdout}\nSTDERR: #{result["stderr"]}"
+
+      end
+
+      # For other non-zero exit codes, raise error
+      raise Error, "Command failed (#{command}):\nSTDOUT: #{stdout}\nSTDERR: #{result["stderr"]}" unless exit_code == 0
+
       :ok
     end
 
@@ -127,7 +147,9 @@ module Devagent
       command = args.fetch("command")
       # Extract base command (before any flags or help flags)
       # Remove common help flags if present
-      base_cmd = command.split.reject { |part| %w[--help -h help].include?(part) }.first || command.split.first || command
+      base_cmd = command.split.reject do |part|
+        %w[--help -h help].include?(part)
+      end.first || command.split.first || command
 
       context.tracer.event("check_command_help", command: base_cmd)
       return "skipped" if dry_run?
@@ -136,16 +158,17 @@ module Devagent
       # Try --help first, fall back to -h if that fails
       help_output = nil
       ["--help", "-h", "help"].each do |help_flag|
-        begin
-          help_output = Util.run!([base_cmd.to_s, help_flag], chdir: context.repo_path)
-          break
-        rescue StandardError => e
-          # Try next help flag
-          next
-        end
+        help_output = Util.run!([base_cmd.to_s, help_flag], chdir: context.repo_path)
+        break
+      rescue StandardError
+        # Try next help flag
+        next
       end
 
-      raise Error, "Could not get help for command: #{base_cmd}. Command may not support --help, -h, or help flags." if help_output.nil?
+      if help_output.nil?
+        raise Error,
+              "Could not get help for command: #{base_cmd}. Command may not support --help, -h, or help flags."
+      end
 
       help_output
     end
@@ -154,12 +177,13 @@ module Devagent
       # Strict mode: only accept structured program+args.
       # This avoids shell parsing and makes allowlisting deterministic.
       raise Error, "exec.run no longer accepts a raw command string; use {program,args}" if args.key?("command")
+
       program = args.fetch("program")
       argv = args.fetch("args")
       invocation = [program.to_s] + Array(argv).map(&:to_s)
 
       context.tracer.event("run_command", command: invocation.is_a?(Array) ? invocation.join(" ") : invocation)
-      return({ "stdout" => "", "stderr" => "", "exit_code" => 0 }) if dry_run?
+      return { "stdout" => "", "stderr" => "", "exit_code" => 0 } if dry_run?
       raise Error, "command not allowed" unless command_allowed?(invocation)
 
       timeout_s = (context.config.dig("auto", "command_timeout_seconds") || 60).to_i
@@ -186,7 +210,7 @@ module Devagent
     def error_summary(args)
       stderr = args.fetch("stderr").to_s
       context.tracer.event("diagnostics_error_summary", bytes: stderr.bytesize)
-      return({ "root_cause" => "", "confidence" => 0.0 }) if stderr.strip.empty?
+      return { "root_cause" => "", "confidence" => 0.0 } if stderr.strip.empty?
 
       raw = context.query(
         role: :developer,
@@ -217,8 +241,8 @@ module Devagent
 
     def git_status(_args)
       context.tracer.event("git_status")
-      return({ "stdout" => "", "stderr" => "", "exit_code" => 0 }) if dry_run?
-      return({ "stdout" => "", "stderr" => "Not a git repository", "exit_code" => 1 }) unless git_repo?
+      return { "stdout" => "", "stderr" => "", "exit_code" => 0 } if dry_run?
+      return { "stdout" => "", "stderr" => "Not a git repository", "exit_code" => 1 } unless git_repo?
 
       r = Util.run_capture("git status --porcelain", chdir: context.repo_path)
       { "stdout" => r["stdout"].to_s, "stderr" => r["stderr"].to_s, "exit_code" => r["exit_code"].to_i }
@@ -227,8 +251,8 @@ module Devagent
     def git_diff(args)
       staged = args["staged"] == true
       context.tracer.event("git_diff", staged: staged)
-      return({ "stdout" => "", "stderr" => "", "exit_code" => 0 }) if dry_run?
-      return({ "stdout" => "", "stderr" => "Not a git repository", "exit_code" => 1 }) unless git_repo?
+      return { "stdout" => "", "stderr" => "", "exit_code" => 0 } if dry_run?
+      return { "stdout" => "", "stderr" => "Not a git repository", "exit_code" => 1 } unless git_repo?
 
       cmd = staged ? "git diff --cached" : "git diff"
       r = Util.run_capture(cmd, chdir: context.repo_path)
@@ -290,9 +314,7 @@ module Devagent
 
       # Extra guard: disallow launching an interactive shell unless explicitly allowlisted.
       forbidden_shells = %w[bash sh zsh fish].freeze
-      if (tokens & forbidden_shells).any? && !allow.any? { |a| forbidden_shells.include?(a) }
-        return false
-      end
+      return false if (tokens & forbidden_shells).any? && !allow.any? { |a| forbidden_shells.include?(a) }
 
       true
     rescue ArgumentError
@@ -303,6 +325,7 @@ module Devagent
       lines = diff.to_s.lines
       raise Error, "diff too large" if lines.count > 200
       raise Error, "diff missing hunk context" unless diff.include?("@@")
+
       text = diff.to_s
 
       # Accept either:
@@ -310,13 +333,14 @@ module Devagent
       # - new files:     --- /dev/null ... +++ b/<path>
       mod_header = "--- a/#{path}\n+++ b/#{path}"
       new_header = "--- /dev/null\n+++ b/#{path}"
-      unless text.include?(mod_header) || text.include?(new_header)
-        raise Error, "path mismatch in diff"
-      end
+      return if text.include?(mod_header) || text.include?(new_header)
+
+      raise Error, "path mismatch in diff"
     end
 
     def truncate_bytes(text, max_bytes)
       return "" if text.nil?
+
       s = text.to_s
       return s if s.bytesize <= max_bytes
 

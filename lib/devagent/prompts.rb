@@ -41,8 +41,12 @@ module Devagent
       - Never assume file contents without reading.
       - If uncertain, add assumptions explicitly.
       - If task is impossible, return an empty steps array and explain in assumptions.
-      - ALWAYS set confidence to a reasonable value (0.5-1.0). Simple tasks should have HIGH confidence (0.8+).
+      - CRITICAL: ALWAYS set confidence to a reasonable value (0.5-1.0). NEVER set confidence to 0 or below 0.3.
+      - Simple tasks (add comment, read file, run test) should have HIGH confidence (0.8-1.0).
+      - Medium tasks should have confidence 0.6-0.8.
+      - Complex tasks should have confidence 0.5-0.7.
       - For simple command execution tasks, confidence should be 0.8 or higher.
+      - For simple file edits (add comment, change one line), confidence should be 0.8 or higher.
 
       File reading guidance:
       - For questions about repository description/purpose, identify and read relevant documentation files (README, docs, etc.) based on what's available in the repository.
@@ -60,10 +64,22 @@ module Devagent
       Given ORIGINAL content and TARGET intent, produce a unified diff.
 
       Rules:
-      - Return diff only. No prose.
+      - Return diff only. No prose, no explanations, no markdown code blocks.
+      - The diff MUST start with "--- a/" and "+++ b/" lines.
+      - The diff MUST include "@@" hunk headers (e.g., "@@ -1,5 +1,6 @@").
       - Do not rewrite unchanged lines.
       - Keep formatting intact.
       - Minimize diff size.
+      - Use unified diff format with proper hunk context.
+
+      Example format:
+      --- a/path/to/file.rb
+      +++ b/path/to/file.rb
+      @@ -1,3 +1,4 @@
+      +# Comment added here
+       original line 1
+       original line 2
+       original line 3
       - Use unified diff with file headers:
         If File exists is true:
           --- a/<path>

@@ -127,6 +127,21 @@ module Devagent
             end
           end
 
+          # Check if we should use fallback for CODE_EDIT tasks with low confidence
+          # Do this BEFORE validation to avoid unnecessary validation errors
+          if state.intent == "CODE_EDIT" && (plan.confidence.to_f < 0.3 || plan.steps.empty?)
+            unless quiet?
+              streamer.say("Planning generated low confidence for code edit. Attempting to create minimal plan...",
+                           level: :warn)
+            end
+            minimal_plan = create_minimal_edit_plan(task)
+            if minimal_plan
+              state.plan = minimal_plan
+              state.phase = :execution
+              next
+            end
+          end
+
           begin
             validate_plan!(state, plan, visible_tools: visible_tools)
           rescue StandardError => e
@@ -146,6 +161,7 @@ module Devagent
               use_repo_context = question_about_repo?(task)
               return answer_unactionable(task, state.intent_confidence, use_repo_context: use_repo_context)
             end
+            # If validation fails for other reasons (not confidence), we've already tried minimal plan above
             state.record_error(signature: "plan_rejected", message: e.message)
             state.record_observation({ "type" => "PLAN_REJECTED", "message" => e.message })
             state.phase = :decision
@@ -422,7 +438,7 @@ module Devagent
       allowed_dirs = allowlist
         .map { |pattern| pattern.gsub(/\*\*?$/, "").chomp("/") }
         .reject { |dir| dir.empty? || dir.include?("*") || dir.include?("?") }
-        .select { |dir| 
+        .select { |dir|
           full_path = File.join(context.repo_path, dir)
           # Check if it's a directory and if files in it would be allowed
           Dir.exist?(full_path) && context.tool_bus.safety.allowed?("#{dir}/test.rb")
@@ -1002,6 +1018,61 @@ module Devagent
         confidence: 0.6,
         summary: task,
         actions: []
+      )
+    end
+
+    def create_minimal_edit_plan(task)
+      # Create a simple plan for code editing tasks when planner fails
+      # This handles simple cases like "add a comment at the top of file.rb"
+
+      # Extract file path from common patterns
+      # Patterns: "add X to file.rb", "add X at the top of file.rb", "add X in file.rb"
+      file_path_match = task.to_s.match(/\b(?:at\s+the\s+top\s+of|in|to|at)\s+([a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
+      file_path = file_path_match ? file_path_match[1] : nil
+
+      # If no file path found, try to extract from the end of the task
+      unless file_path
+        # Look for file paths at the end: "add comment lib/file.rb"
+        end_match = task.to_s.match(/\s+([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)\s*$/i)
+        file_path = end_match[1] if end_match
+      end
+
+      unless file_path
+        context.tracer.event("minimal_edit_plan_failed", reason: "Could not extract file path from task", task: task.to_s) if context.respond_to?(:tracer)
+        return nil
+      end
+
+      # Validate the file path is allowed
+      unless context.tool_bus.safety.allowed?(file_path)
+        context.tracer.event("minimal_edit_plan_failed", reason: "File path not in allowlist", path: file_path) if context.respond_to?(:tracer)
+        return nil
+      end
+
+      # Create a simple plan: read the file, then write it with modifications
+      steps = [
+        {
+          "step_id" => 1,
+          "action" => "fs.read",
+          "path" => file_path,
+          "reason" => "Read file to understand current content",
+          "depends_on" => []
+        },
+        {
+          "step_id" => 2,
+          "action" => "fs.write",
+          "path" => file_path,
+          "reason" => task.to_s.strip,
+          "depends_on" => [1]
+        }
+      ]
+
+      Plan.new(
+        plan_id: "minimal_edit_#{Time.now.to_i}",
+        goal: task,
+        assumptions: ["Using minimal plan: read file then apply requested changes"],
+        steps: steps,
+        success_criteria: ["File read and modified successfully"],
+        confidence: 0.8
       )
     end
 

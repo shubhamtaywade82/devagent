@@ -36,7 +36,13 @@ module Devagent
 
     def glob_match?(patterns, relative_path)
       patterns.any? do |glob|
-        File.fnmatch?(glob, relative_path, File::FNM_PATHNAME | File::FNM_EXTGLOB)
+        # FNM_PATHNAME requires ** to match at least one path separator
+        # So "lib/**" matches "lib/a/b" but not "lib/a" directly
+        # We need to handle both cases: try with and without FNM_PATHNAME
+        File.fnmatch?(glob, relative_path, File::FNM_PATHNAME | File::FNM_EXTGLOB) ||
+          File.fnmatch?(glob, relative_path, File::FNM_EXTGLOB) ||
+          # Also try matching with a wildcard pattern for direct matches
+          (glob.end_with?("/**") && File.fnmatch?("#{glob.chomp('/**')}/**/*", relative_path, File::FNM_PATHNAME | File::FNM_EXTGLOB))
       end
     end
 
