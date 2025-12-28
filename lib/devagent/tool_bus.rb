@@ -117,6 +117,33 @@ module Devagent
       :ok
     end
 
+    def check_command_help(args)
+      command = args.fetch("command")
+      # Extract base command (before any flags)
+      base_cmd = command.split.first || command
+
+      context.tracer.event("check_command_help", command: base_cmd)
+      return "skipped" if dry_run?
+      raise Error, "command not allowed" unless command_allowed?(base_cmd)
+
+      # Try --help first, fall back to -h if that fails
+      help_output = nil
+      ["--help", "-h", "help"].each do |help_flag|
+        begin
+          help_command = "#{base_cmd} #{help_flag}"
+          help_output = Util.run!(help_command, chdir: context.repo_path)
+          break
+        rescue StandardError => e
+          # Try next help flag
+          next
+        end
+      end
+
+      raise Error, "Could not get help for command: #{base_cmd}. Command may not support --help, -h, or help flags." if help_output.nil?
+
+      help_output
+    end
+
     def run_command(args)
       command = args.fetch("command")
       context.tracer.event("run_command", command: command)

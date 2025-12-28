@@ -150,6 +150,23 @@ module Devagent
           safety: ["WHITELISTED_ONLY"]
         ),
         Tool.new(
+          name: "check_command_help",
+          schema: {
+            "type" => "object",
+            "required" => ["command"],
+            "properties" => {
+              "command" => { "type" => "string" }
+            }
+          },
+          handler: :check_command_help,
+          description: "Check the help/documentation for a command (e.g., 'rubocop --help') to understand correct usage and flags before executing it.",
+          allowed_phases: %i[execution],
+          visible_phases: %i[planning],
+          depends_on: [],
+          side_effects: ["EXECUTES_COMMAND"],
+          safety: ["WHITELISTED_ONLY"]
+        ),
+        Tool.new(
           name: "run_command",
           schema: {
             "type" => "object",
@@ -159,7 +176,7 @@ module Devagent
             }
           },
           handler: :run_command,
-          description: "Run a whitelisted shell command inside the repo (e.g., rubocop, bundle exec rspec, make test).",
+          description: "Run a whitelisted shell command inside the repo (e.g., rubocop, bundle exec rspec, make test). Always check command help first if uncertain about flags or syntax.",
           allowed_phases: %i[execution],
           visible_phases: %i[planning],
           depends_on: [],

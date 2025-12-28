@@ -27,6 +27,19 @@ module Devagent
       - If uncertain, add assumptions explicitly.
       - If task is impossible, return an empty steps array and explain in assumptions.
 
+      IMPORTANT: Before running any command you're not certain about:
+      1. First use check_command_help with the base command (e.g., "rubocop") to see available flags
+      2. Review the help output to understand correct syntax
+      3. Then use run_command with the correct flags based on the help output
+
+      Common command examples for run_command:
+      - RuboCop: "rubocop" or "bundle exec rubocop" (check help first for available flags)
+      - Tests: "bundle exec rspec" or "npm test" or "make test"
+      - Linting: "rubocop", "eslint .", "flake8 ."
+      - Build: "bundle install", "npm install", "make build"
+      - Always check command help first if uncertain about flags or syntax
+      - Commands run in the repository root directory.
+
       Output must strictly match the schema:
       {
         "plan_id": "string",
@@ -35,7 +48,7 @@ module Devagent
         "steps": [
           {
             "step_id": 1,
-            "action": "fs_read | fs_write | fs_delete | run_tests | run_command",
+            "action": "fs_read | fs_write | fs_delete | check_command_help | run_tests | run_command",
             "path": "string | null",
             "command": "string | null",
             "reason": "string",

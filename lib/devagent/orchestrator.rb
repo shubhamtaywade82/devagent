@@ -131,11 +131,26 @@ module Devagent
         state.record_observation(normalize_step_observation(result, step))
         raise Error, "step #{step["step_id"]} failed" unless result["success"]
       rescue StandardError => e
-        streamer.say("Step #{step["step_id"]} failed: #{e.message}", level: :error)
-        state.record_error(signature: "step_failed:#{step["step_id"]}", message: e.message)
-        state.step_results[step["step_id"]] = { "success" => false, "error" => e.message }
+        error_msg = e.message
+        # Provide more helpful error messages for command failures
+        if error_msg.include?("Command failed") && step["action"] == "run_command"
+          # Extract the actual error from stderr if available
+          if error_msg.include?("STDERR:")
+            stderr_part = error_msg.split("STDERR:").last.strip
+            streamer.say("Step #{step["step_id"]} failed: Command error", level: :error)
+            streamer.say("Command: #{step["command"]}", level: :error)
+            streamer.say("Error: #{stderr_part}", level: :error)
+            streamer.say("Note: Commands run in: #{context.repo_path}", level: :info)
+          else
+            streamer.say("Step #{step["step_id"]} failed: #{error_msg}", level: :error)
+          end
+        else
+          streamer.say("Step #{step["step_id"]} failed: #{error_msg}", level: :error)
+        end
+        state.record_error(signature: "step_failed:#{step["step_id"]}", message: error_msg)
+        state.step_results[step["step_id"]] = { "success" => false, "error" => error_msg }
         state.record_observation({ "type" => "STEP_FAILED", "step_id" => step["step_id"], "status" => "FAIL",
-                                   "error" => e.message })
+                                   "error" => error_msg })
         break
       end
     end
@@ -171,6 +186,8 @@ module Devagent
 
         ensure_read_same_path!(state, path)
         tool_invoke_with_policy(state, "fs_delete", "path" => path.to_s)
+      when "check_command_help"
+        tool_invoke_with_policy(state, "check_command_help", "command" => command)
       when "run_tests"
         tool_invoke_with_policy(state, "run_tests", "command" => command)
       when "run_command"
@@ -203,6 +220,9 @@ module Devagent
         state.record_file_written(args["path"])
       when "git_apply"
         state.record_patch_applied
+      when "check_command_help"
+        state.record_observation({ "type" => "COMMAND_HELP_CHECKED", "command" => args["command"],
+                                   "help_output" => result })
       when "run_command"
         state.record_command(args["command"])
       when "run_tests"
@@ -437,16 +457,17 @@ module Devagent
 
       step_actions = plan.steps.map { |s| s["action"].to_s }
       # fs_write is a logical action that gets converted to fs_write_diff
-      # run_command and run_tests are always allowed for command execution
+      # Command-related actions are always allowed
       unknown = step_actions.reject do |a|
-        allowed_names.include?(a) || a == "fs_write" || a == "run_command" || a == "run_tests"
+        allowed_names.include?(a) || a == "fs_write" || a == "run_command" || a == "run_tests" || a == "check_command_help"
       end
       raise Error, "plan uses unknown tools: #{unknown.uniq.join(", ")}" unless unknown.empty?
 
       # Read scope limiter: first cycle may read at most one file.
-      # Exception: if plan only contains commands (no file operations), allow it
-      command_only = plan.steps.all? { |s| %w[run_command run_tests].include?(s["action"].to_s) }
-      if state.cycle.to_i == 0 && !command_only
+      # Exception: if plan includes commands (run_command/run_tests/check_command_help), relax the restriction
+      # This allows plans that run tools like rubocop even if they read some files first
+      has_commands = plan.steps.any? { |s| %w[run_command run_tests check_command_help].include?(s["action"].to_s) }
+      if state.cycle.to_i == 0 && !has_commands
         reads = plan.steps.count { |s| s["action"].to_s == "fs_read" }
         raise Error, "too many reads in first plan" if reads > 1
       end
