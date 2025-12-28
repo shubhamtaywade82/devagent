@@ -38,6 +38,7 @@ module Devagent
               "action" => { "type" => "string" },
               "path" => { "type" => ["string", "null"] },
               "command" => { "type" => ["string", "null"] },
+              "content" => { "type" => ["string", "null"] },
               "reason" => { "type" => "string" },
               "depends_on" => { "type" => "array", "items" => { "type" => "integer", "minimum" => 0 } }
             }
@@ -102,6 +103,7 @@ module Devagent
               "action" => step["action"],
               "path" => step["path"],
               "command" => step["command"],
+              "content" => step["content"],
               "reason" => step["reason"],
               "depends_on" => Array(step["depends_on"])
             }

@@ -183,18 +183,38 @@ module Devagent
       action = step["action"].to_s
       path = step["path"]
       command = step["command"]
+      content = step["content"]
 
       case action
       when "fs.read", "fs_read"
         tool_invoke_with_policy(state, "fs.read", "path" => path)
+      when "fs.create"
+        raise Error, "path required" if path.to_s.empty?
+        raise Error, "file already exists: #{path}" if File.exist?(File.join(context.repo_path, path.to_s))
+
+        raise Error, "content required" if content.to_s.empty?
+        diff = DiffGenerator.new(context).generate(
+          path: path.to_s,
+          original: "",
+          goal: plan.goal.to_s,
+          reason: "Create file with provided content.\n\n#{step["reason"]}\n\nTARGET CONTENT:\n#{content}",
+          file_exists: false
+        )
+
+        tool_invoke_with_policy(state, "fs.write_diff", "path" => path.to_s, "diff" => diff)
       when "fs.write", "fs_write"
         # diff-first write: read must have happened, then generate diff, then apply diff.
         raise Error, "path required" if path.to_s.empty?
 
         ensure_read_same_path!(state, path)
         original = context.tool_bus.read_file("path" => path.to_s).fetch("content")
-        diff = DiffGenerator.new(context).generate(path: path.to_s, original: original, goal: plan.goal.to_s,
-                                                   reason: step["reason"].to_s)
+        diff = DiffGenerator.new(context).generate(
+          path: path.to_s,
+          original: original,
+          goal: plan.goal.to_s,
+          reason: step["reason"].to_s,
+          file_exists: true
+        )
         tool_invoke_with_policy(state, "fs.write_diff", "path" => path.to_s, "diff" => diff)
       when "fs.delete", "fs_delete"
         raise Error, "path required" if path.to_s.empty?

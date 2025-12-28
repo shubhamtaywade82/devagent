@@ -73,8 +73,8 @@ RSpec.describe Devagent::Orchestrator do
         goal: "Do work",
         assumptions: [],
         steps: [
-          { "step_id" => 1, "action" => "fs.read", "path" => "file", "command" => nil, "reason" => "read", "depends_on" => [0] },
-          { "step_id" => 2, "action" => "fs.write", "path" => "file", "command" => nil, "reason" => "write", "depends_on" => [1] }
+          { "step_id" => 1, "action" => "fs.read", "path" => "file", "command" => nil, "content" => nil, "reason" => "read", "depends_on" => [0] },
+          { "step_id" => 2, "action" => "fs.write", "path" => "file", "command" => nil, "content" => nil, "reason" => "write", "depends_on" => [1] }
         ],
         success_criteria: ["tests pass"],
         rollback_strategy: "revert",
@@ -131,7 +131,7 @@ RSpec.describe Devagent::Orchestrator do
           goal: "Do work",
           assumptions: [],
           steps: [
-            { "step_id" => 1, "action" => "fs.read", "path" => "file", "command" => nil, "reason" => "read", "depends_on" => [0] }
+            { "step_id" => 1, "action" => "fs.read", "path" => "file", "command" => nil, "content" => nil, "reason" => "read", "depends_on" => [0] }
           ],
           success_criteria: [],
           rollback_strategy: "revert",

@@ -45,8 +45,12 @@ module Devagent
       - Keep formatting intact.
       - Minimize diff size.
       - Use unified diff with file headers:
-        --- a/<path>
-        +++ b/<path>
+        If File exists is true:
+          --- a/<path>
+          +++ b/<path>
+        If File exists is false (new file):
+          --- /dev/null
+          +++ b/<path>
       - Include @@ hunk headers with context.
     PROMPT
 

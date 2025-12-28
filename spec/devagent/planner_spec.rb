@@ -40,8 +40,8 @@ RSpec.describe Devagent::Planner do
       "goal" => "Ship feature",
       "assumptions" => ["Repo is writable"],
       "steps" => [
-        { "step_id" => 1, "action" => "fs.read", "path" => "README.md", "command" => nil, "reason" => "Inspect existing docs", "depends_on" => [0] },
-        { "step_id" => 2, "action" => "fs.write", "path" => "README.md", "command" => nil, "reason" => "Update docs", "depends_on" => [1] }
+        { "step_id" => 1, "action" => "fs.read", "path" => "README.md", "command" => nil, "content" => nil, "reason" => "Inspect existing docs", "depends_on" => [0] },
+        { "step_id" => 2, "action" => "fs.write", "path" => "README.md", "command" => nil, "content" => nil, "reason" => "Update docs", "depends_on" => [1] }
       ],
       "success_criteria" => ["README updated"],
       "rollback_strategy" => "Revert the README changes",

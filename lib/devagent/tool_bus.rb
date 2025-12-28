@@ -279,8 +279,16 @@ module Devagent
       lines = diff.to_s.lines
       raise Error, "diff too large" if lines.count > 200
       raise Error, "diff missing hunk context" unless diff.include?("@@")
-      expected = "--- a/#{path}"
-      raise Error, "path mismatch in diff" unless diff.to_s.start_with?(expected)
+      text = diff.to_s
+
+      # Accept either:
+      # - modifications: --- a/<path> ... +++ b/<path>
+      # - new files:     --- /dev/null ... +++ b/<path>
+      mod_header = "--- a/#{path}\n+++ b/#{path}"
+      new_header = "--- /dev/null\n+++ b/#{path}"
+      unless text.include?(mod_header) || text.include?(new_header)
+        raise Error, "path mismatch in diff"
+      end
     end
 
     def truncate_bytes(text, max_bytes)
