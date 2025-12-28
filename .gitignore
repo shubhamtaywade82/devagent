@@ -6,6 +6,11 @@
 /pkg/
 /spec/reports/
 /tmp/
+/vendor/bundle/
+/vendor/cache/
 
 # rspec failure tracking
 .rspec_status
+.devagent/**
+.env.*
+.env

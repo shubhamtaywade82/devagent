@@ -2,163 +2,310 @@
 
 require "json"
 require "json-schema"
-require_relative "context_hints"
+require_relative "prompts"
 
 module Devagent
-  Plan = Struct.new(:actions, :confidence)
+  Plan = Struct.new(
+    :plan_id,
+    :goal,
+    :assumptions,
+    :steps,
+    :success_criteria,
+    :rollback_strategy,
+    :confidence,
+    :actions,
+    :summary,
+    keyword_init: true
+  )
 
-  # Planner asks the LLM for an actionable plan and validates the response.
+  # Planner coordinates with the planning and review models to produce
+  # validated actions.
   class Planner
-    ACTION_SCHEMA = {
-      "type" => {
-        "type" => "string",
-        "enum" => %w[edit_file create_file apply_patch run_command generate_tests migrate]
-      },
-      "path" => { "type" => %w[string null] },
-      "whole_file" => { "type" => %w[boolean null] },
-      "content" => { "type" => %w[string null] },
-      "patch" => { "type" => %w[string null] },
-      "command" => { "type" => %w[string null] },
-      "notes" => { "type" => %w[string null] }
+    PLAN_SCHEMA_V2 = {
+      "type" => "object",
+      "required" => %w[plan_id goal assumptions steps success_criteria rollback_strategy confidence],
+      "properties" => {
+        "plan_id" => { "type" => "string" },
+        "goal" => { "type" => "string" },
+        "assumptions" => { "type" => "array", "items" => { "type" => "string" } },
+        "steps" => {
+          "type" => "array",
+          "items" => {
+            "type" => "object",
+            "required" => %w[step_id action path command reason depends_on],
+            "properties" => {
+              "step_id" => { "type" => "integer", "minimum" => 1 },
+              "action" => { "type" => "string" },
+              "path" => { "type" => %w[string null] },
+              "command" => { "type" => %w[string null] },
+              "reason" => { "type" => "string" },
+              "depends_on" => { "type" => "array", "items" => { "type" => "integer", "minimum" => 0 } }
+            }
+          }
+        },
+        "success_criteria" => { "type" => "array", "items" => { "type" => "string" } },
+        "rollback_strategy" => { "type" => "string" },
+        "confidence" => { "type" => "number", "minimum" => 0, "maximum" => 1 }
+      }
+    }.freeze
+
+    PLAN_SCHEMA_V1 = {
+      "type" => "object",
+      "required" => %w[confidence actions],
+      "properties" => {
+        "confidence" => { "type" => "number", "minimum" => 0, "maximum" => 1 },
+        "summary" => { "type" => "string" },
+        "actions" => {
+          "type" => "array",
+          "items" => {
+            "type" => "object",
+            "required" => ["type"],
+            "properties" => {
+              "type" => { "type" => "string" },
+              "args" => { "type" => %w[object null] }
+            }
+          }
+        }
+      }
     }.freeze
 
     PLAN_SCHEMA = {
-      "type" => "object",
-      "required" => %w[actions confidence],
-      "properties" => {
-        "confidence" => { "type" => "number", "minimum" => 0, "maximum" => 1 },
-        "actions" => { "type" => "array", "items" => { "type" => "object", "properties" => ACTION_SCHEMA } }
-      }
+      "anyOf" => [PLAN_SCHEMA_V2, PLAN_SCHEMA_V1]
     }.freeze
 
-    SYSTEM = <<~SYS
-      You are a senior software engineer. Return ONLY valid JSON.
-      JSON:
-      {
-        "confidence": 0.0-1.0,
-        "actions": [
-          {"type": "create_file", "path": "relative/path.rb", "content": "..."},
-          {"type": "edit_file", "path": "app/models/user.rb", "whole_file": true, "content": "..."},
-          {"type": "apply_patch", "path": "app/models/user.rb", "patch": "UNIFIED DIFF"},
-          {"type": "generate_tests", "path": "app/models/user.rb"},
-          {"type": "run_command", "command": "bundle exec rspec"},
-          {"type": "migrate"}
-        ]
+    REVIEW_SCHEMA = {
+      "type" => "object",
+      "required" => %w[approved issues],
+      "properties" => {
+        "approved" => { "type" => "boolean" },
+        "issues" => { "type" => "array", "items" => { "type" => "string" } }
       }
-      Constraints:
-      - Paths must be INSIDE the repository and relative.
-      - Prefer unified diffs for small changes; use whole_file for large rewrites.
-      - For Rails, ensure migrations are reversible; add RSpec when needed.
-      - Keep plans minimal and safe.
-      Workflow expectations:
-      - Begin by summarizing repository structure and key files.
-      - Review README/CHANGELOG snippets before proposing code changes.
-      - Produce multi-step plans (>=3 steps when work spans multiple edits) and mark only one step as in progress.
-      - Identify implementation points using the provided survey context (instead of re-scanning) and prefer precise edits.
-      - Generate or update specs when behaviour changes and schedule test runs (e.g., bundle exec rspec).
-      - Call out follow-up actions such as git status or verification steps when appropriate.
-      - Avoid destructive commands unless absolutely necessary; respect potential sandbox limitations.
-    SYS
-
-    DEFAULT_PLAN = Plan.new([], 0.0).freeze
-
-    def self.plan(ctx:, task:)
-      include_context = Devagent::ContextHints.context_needed?(task)
-      prompt = build_prompt(ctx, task, include_context: include_context)
-      json = parse_plan(invoke_llm(ctx, prompt))
-      actions = json.fetch("actions", [])
-      confidence = json.fetch("confidence", 0.0).to_f
-      Plan.new(actions, confidence)
+    }.freeze
+    def initialize(context, streamer: nil)
+      @context = context
+      @streamer = streamer
     end
 
-    def self.safe_retrieve(ctx, task)
-      return "" unless ctx.respond_to?(:index) && ctx.index.respond_to?(:retrieve)
+    def plan(task, controller_feedback: nil, visible_tools: nil)
+      attempts = 0
+      feedback = nil
+      raw_plan = nil
 
-      Array(ctx.index.retrieve(task, limit: 12)).join("\n\n")
-    rescue StandardError
-      ""
+      loop do
+        raw_plan = generate_plan(task, feedback, controller_feedback: controller_feedback, visible_tools: visible_tools)
+        payload = parse_plan(raw_plan)
+        review = review_plan(task, raw_plan)
+        if review["approved"] || attempts >= 1
+          steps = Array(payload["steps"]).map do |step|
+            {
+              "step_id" => step["step_id"],
+              "action" => step["action"],
+              "path" => step["path"],
+              "command" => step["command"],
+              "reason" => step["reason"],
+              "depends_on" => Array(step["depends_on"])
+            }
+          end
+
+          # Back-compat: allow legacy "actions" plans by wrapping into step form.
+          if steps.empty? && payload["actions"]
+            steps = Array(payload["actions"]).each_with_index.map do |action, idx|
+              {
+                "step_id" => idx + 1,
+                "action" => action["type"],
+                "path" => action.dig("args", "path"),
+                "command" => action.dig("args", "command"),
+                "reason" => "legacy action",
+                "depends_on" => []
+              }
+            end
+          end
+
+          break Plan.new(
+            plan_id: payload["plan_id"],
+            goal: payload["goal"] || payload["summary"],
+            assumptions: Array(payload["assumptions"]),
+            steps: steps,
+            success_criteria: Array(payload["success_criteria"]),
+            rollback_strategy: payload["rollback_strategy"].to_s,
+            confidence: payload["confidence"].to_f,
+            summary: (payload["goal"] || payload["summary"]).to_s,
+            actions: [] # no longer used for execution
+          )
+        end
+
+        attempts += 1
+        feedback = Array(review["issues"]).reject(&:empty?)
+        context.tracer.event("plan_review_rejected", issues: feedback)
+      end
+    rescue StandardError => e
+      context.tracer.event("planner_error", message: e.message)
+      Plan.new(summary: "planning failed", actions: [], confidence: 0.0)
     end
-    private_class_method :safe_retrieve
 
-    def self.invoke_llm(ctx, prompt)
-      llm = ctx.llm
-      return "" unless llm.respond_to?(:call)
+    private
 
-      llm.call(prompt).to_s
-    rescue StandardError
-      ""
+    attr_reader :context, :streamer
+
+    def generate_plan(task, feedback, controller_feedback:, visible_tools:)
+      prompt = build_prompt(task, feedback, controller_feedback: controller_feedback, visible_tools: visible_tools)
+      response_format = json_schema_format(PLAN_SCHEMA) if context.provider_for(:planner) == "openai"
+      return stream_plan(prompt, response_format) if streamer
+
+      context.query(
+        role: :planner,
+        prompt: prompt,
+        stream: false,
+        response_format: response_format,
+        params: { temperature: 0.1 }
+      )
     end
-    private_class_method :invoke_llm
 
-    def self.parse_plan(raw)
-      return { "actions" => [], "confidence" => 0.0 } if raw.to_s.strip.empty?
+    def review_plan(task, raw_plan)
+      prompt = build_review_prompt(task, raw_plan)
+      response_format = json_schema_format(REVIEW_SCHEMA) if context.provider_for(:reviewer) == "openai"
+      review_raw = context.query(
+        role: :reviewer,
+        prompt: prompt,
+        stream: false,
+        response_format: response_format,
+        params: { temperature: 0.1 }
+      )
+      parse_review(review_raw)
+    rescue StandardError => e
+      context.tracer.event("plan_review_error", message: e.message)
+      { "approved" => true, "issues" => [] }
+    end
 
+    def parse_plan(raw)
       json = JSON.parse(raw)
       JSON::Validator.validate!(PLAN_SCHEMA, json)
       json
-    rescue JSON::ParserError, JSON::Schema::SchemaError, JSON::Schema::ValidationError
-      { "actions" => [], "confidence" => 0.0 }
+    rescue JSON::ParserError, JSON::Schema::ValidationError => e
+      context.tracer.event("plan_invalid_json", message: e.message, raw: raw)
+      {
+        "confidence" => 0.0,
+        "plan_id" => "",
+        "goal" => "",
+        "assumptions" => ["invalid plan JSON/schema"],
+        "steps" => [],
+        "success_criteria" => [],
+        "rollback_strategy" => ""
+      }
     end
-    private_class_method :parse_plan
 
-    def self.build_prompt(ctx, task, include_context: true)
-      survey_section = include_context ? survey_text(ctx) : ""
-      repo_context = include_context ? safe_retrieve(ctx, task) : ""
+    def parse_review(raw)
+      json = JSON.parse(raw)
+      JSON::Validator.validate!(REVIEW_SCHEMA, json)
+      json
+    rescue JSON::ParserError, JSON::Schema::ValidationError => e
+      context.tracer.event("plan_review_invalid", message: e.message, raw: raw)
+      { "approved" => true, "issues" => [] }
+    end
+
+    def build_prompt(task, feedback, controller_feedback:, visible_tools:)
+      # Context assembly discipline: after we have controller feedback (i.e., post-iteration),
+      # do not keep expanding context with long history or broad retrieval. Feed only reduced observations.
+      retrieved = ""
+      history = ""
+      if controller_feedback.to_s.strip.empty?
+        retrieved = context.index.retrieve(task, limit: 6).map do |snippet|
+          "#{snippet["path"]}:\n#{snippet["text"]}\n---"
+        end.join("\n")
+
+        history = context.session_memory.last_turns(6).map do |turn|
+          "#{turn["role"]}: #{turn["content"]}"
+        end.join("\n")
+      end
+
+      plugin_guidance = context.plugins.filter_map do |plugin|
+        plugin.on_prompt(context, task) if plugin.respond_to?(:on_prompt)
+      end.join("\n")
+
+      tool_values = if visible_tools
+                      Array(visible_tools)
+                    elsif context.tool_registry.respond_to?(:tools_for_phase)
+                      context.tool_registry.tools_for_phase(:planning).values
+                    else
+                      context.tool_registry.tools.values
+                    end
+
+      tools = tool_values.map do |tool|
+        "- #{tool.name}: #{tool.description}"
+      end.join("\n")
+
+      feedback_section = if feedback && !Array(feedback).empty?
+                           "Known issues from reviewer:\n#{Array(feedback).join("\n")}"
+                         else
+                           ""
+                         end
+
+      controller_section = if controller_feedback && !controller_feedback.to_s.strip.empty?
+                             "Controller observations (normalized):\n#{controller_feedback}"
+                           else
+                             ""
+                           end
 
       <<~PROMPT
-        #{preface_text(ctx, task)}
-        #{SYSTEM}
+        #{Prompts::PLANNER_SYSTEM}
 
-        #{survey_block(survey_section)}
-        #{context_block(repo_context, include_context)}
+        #{plugin_guidance}
 
-        Task from user:
+        Available tools:
+        #{tools}
+
+        Recent conversation:
+        #{history}
+
+        Repository context:
+        #{retrieved}
+
+        #{feedback_section}
+        #{controller_section}
+
+        Task:
         #{task}
-
-        Return JSON only.
       PROMPT
     end
-    private_class_method :build_prompt
 
-    def self.preface_text(ctx, task)
-      Array(ctx.plugins).filter_map do |plugin|
-        next unless plugin.respond_to?(:on_prompt)
+    def build_review_prompt(task, raw_plan)
+      <<~PROMPT
+        #{Prompts::PLANNER_REVIEW_SYSTEM}
 
-        plugin.on_prompt(ctx, task)
-      end.join("\n")
+        Task:
+        #{task}
+
+        Proposed plan JSON:
+        #{raw_plan}
+      PROMPT
     end
-    private_class_method :preface_text
 
-    def self.survey_block(survey_section)
-      return "Repository survey skipped for conversational prompt." if survey_section.to_s.strip.empty?
+    def stream_plan(prompt, response_format)
+      streamer.with_stream(:planner, markdown: false, silent: true) do |push|
+        raw = context.query(
+          role: :planner,
+          prompt: prompt,
+          stream: false,
+          response_format: response_format,
+          params: { temperature: 0.1 }
+        )
 
-      <<~SECTION
-        Repository survey:
-        #{survey_section}
-      SECTION
+        if push
+          raw.each_char { |char| push.call(char) }
+        end
+
+        raw
+      end
     end
-    private_class_method :survey_block
 
-    def self.context_block(repo_context, include_context)
-      return "Repository context skipped for conversational prompt." unless include_context
-
-      <<~SECTION
-        Repository context (truncated):
-        #{repo_context}
-      SECTION
+    def json_schema_format(schema)
+      {
+        type: "json_schema",
+        json_schema: {
+          name: "devagent_schema",
+          schema: schema
+        }
+      }
     end
-    private_class_method :context_block
-
-    def self.survey_text(ctx)
-      return "" unless ctx.respond_to?(:survey)
-
-      survey = ctx.survey
-      return "" unless survey
-
-      survey.summary_text
-    rescue StandardError
-      ""
-    end
-    private_class_method :survey_text
   end
 end

@@ -1,31 +1,49 @@
 # frozen_string_literal: true
 
-RSpec.describe Devagent::Ollama do
-  let(:response_body) { { "response" => "All good" }.to_json }
-  let(:http_response) { instance_double(Net::HTTPResponse, body: response_body) }
+RSpec.describe Devagent::Ollama::Client do
+  class FakeHTTPSuccess < Net::HTTPSuccess
+    attr_accessor :body
+  end
+
+  let(:http) { instance_double(Net::HTTP) }
+  let(:client) { described_class.new({ "host" => "http://localhost:11434", "params" => {} }) }
 
   before do
-    allow(described_class).to receive(:perform_request).and_return(http_response)
-    allow(described_class).to receive(:ensure_success!)
+    allow(Net::HTTP).to receive(:new).and_return(http)
+    allow(http).to receive(:read_timeout=)
   end
 
-  it "does not emit debug logging by default" do
-    allow(described_class).to receive(:debug_mode?).and_return(false)
+  it "returns the generated response text" do
+    response = FakeHTTPSuccess.new("1.1", "200", "OK")
+    response.body = { "response" => "All good" }.to_json
 
-    expect do
-      described_class.query("Hello", model: "test")
-    end.not_to output.to_stdout
+    captured_request = nil
+    allow(http).to receive(:request) do |req|
+      captured_request = req
+      response
+    end
 
-    expect do
-      described_class.query("Hello", model: "test")
-    end.not_to output.to_stderr
+    result = client.generate(prompt: "Hello", model: "test", params: {})
+
+    expect(result).to eq("All good")
+    expect(captured_request).to be_a(Net::HTTP::Post)
+    expect(captured_request.path).to eq("/api/generate")
   end
 
-  it "emits debug lines when DEVAGENT_DEBUG_LLM is truthy" do
-    allow(described_class).to receive(:debug_mode?).and_return(true)
+  it "returns embedding vectors" do
+    response = FakeHTTPSuccess.new("1.1", "200", "OK")
+    response.body = { "embedding" => [0.1, 0.2, 0.3] }.to_json
 
-    expect do
-      described_class.query("Hello", model: "test")
-    end.to output(/\[Ollama\] Prompt:/).to_stderr
+    captured_request = nil
+    allow(http).to receive(:request) do |req|
+      captured_request = req
+      response
+    end
+
+    result = client.embed(prompt: "Hello", model: "test")
+
+    expect(result).to eq([0.1, 0.2, 0.3])
+    expect(captured_request).to be_a(Net::HTTP::Post)
+    expect(captured_request.path).to eq("/api/embeddings")
   end
 end

@@ -1,72 +1,57 @@
 # frozen_string_literal: true
 
-require "fileutils"
 require "thor"
-require "paint"
-require "tty-box"
-require "tty-config"
-require "tty-logger"
-require "tty-prompt"
 require_relative "context"
 require_relative "auto"
 require_relative "diagnostics"
-require_relative "chat/session"
+require_relative "ui"
 
 module Devagent
   # CLI exposes Thor commands for launching the agent and running diagnostics.
   class CLI < Thor
+    class_option :provider, type: :string, desc: "Provider override (auto|openai|ollama)"
+    class_option :model, type: :string, desc: "Default model for general tasks"
+    class_option :planner_model, type: :string, desc: "Planner model override"
+    class_option :developer_model, type: :string, desc: "Developer model override"
+    class_option :reviewer_model, type: :string, desc: "Reviewer/tester model override"
+    class_option :embed_model, type: :string, desc: "Embedding model override"
+
     def self.exit_on_failure?
       true
     end
 
+    # Default task: start the REPL when invoked without a subcommand
     desc "start", "Start autonomous REPL (default)"
-    def start
-      ctx = Context.build(Dir.pwd)
+    def start(*_args)
+      ctx = build_context
       Auto.new(ctx, input: $stdin, output: $stdout).repl
     end
 
-    DEFAULT_MODEL = "deepseek-coder:6.7b"
-    CONFIG_DIR = File.expand_path("~/.config/devagent")
-
-    class_option :verbose, type: :boolean, desc: "Enable verbose logging"
-
-    desc "console", "Start an interactive chat console session with Ollama"
-    method_option :model,
-                  aliases: "-m",
-                  type: :string,
-                  desc: "The model to use (leave blank to use saved default or prompt)"
-    method_option :save_model,
-                  type: :boolean,
-                  default: false,
-                  desc: "Persist the chosen model to ~/.config/devagent/config.yml"
-    def console
-      prompt = TTY::Prompt.new(enable_color: true)
-      model = resolve_model_option(options[:model], prompt)
-
-      save_default_model(model) if options[:save_model]
-
-      say TTY::Box.frame(
-        "Starting interactive session with Ollama\nModel: #{model}",
-        align: :center,
-        padding: 1,
-        title: { top_left: "Devagent" }
-      )
-
-      ctx = load_context
-
-      session = Chat::Session.new(
-        model: model,
-        input: $stdin,
-        output: $stdout,
-        logger: build_logger(options[:verbose]),
-        context: ctx
-      )
-      session.start
+    desc "diag", "Print provider/model diagnostics"
+    def diag
+      ctx = build_context
+      info = {
+        provider: ctx.resolved_provider,
+        models: {
+          default: ctx.model_for(:default),
+          planner: ctx.model_for(:planner),
+          developer: ctx.model_for(:developer),
+          reviewer: ctx.model_for(:reviewer)
+        },
+        embedding: ctx.embedding_backend_info.merge("dim" => ctx.index.metadata["dim"]),
+        openai_key: ctx.openai_available? ? "set" : "missing"
+      }
+      say "Devagent diagnostics"
+      say "  provider     : #{info[:provider]}"
+      say "  models       : #{info[:models]}"
+      say "  embedding    : #{info[:embedding]}"
+      say "  OPENAI_API_KEY: #{info[:openai_key]}"
+      info
     end
 
-    desc "test", "Run diagnostics to verify configuration and Ollama connectivity"
+    desc "test", "Run diagnostics to verify configuration and connectivity"
     def test
-      ctx = Context.build(Dir.pwd)
+      ctx = build_context
       diagnostics = Diagnostics.new(ctx, output: $stdout)
       success = diagnostics.run
       raise Thor::Error, "Diagnostics failed" unless success
@@ -76,64 +61,21 @@ module Devagent
 
     default_task :start
 
-    no_commands do
-      def resolve_model_option(option_value, prompt)
-        trimmed = option_value.to_s.strip
-        return trimmed unless trimmed.empty?
+    private
 
-        stored = if config.respond_to?(:key?) && config.key?(:defaults, :model)
-                   config.fetch(:defaults, :model)
-                 end
-        default_choice = stored.to_s.empty? ? DEFAULT_MODEL : stored
+    def build_context
+      Context.build(Dir.pwd, context_overrides)
+    end
 
-        interactive = prompt.respond_to?(:input) ? prompt.input.tty? : $stdin.tty?
-        return default_choice unless interactive
-
-        prompt.ask("Select Ollama model:", default: default_choice) do |q|
-          q.modify :strip
-          q.required true
-        end
-      end
-
-      def save_default_model(model)
-        FileUtils.mkdir_p(CONFIG_DIR)
-        config.set(:defaults, :model, model)
-        config.write(force: true)
-        say Paint["Saved default model to #{CONFIG_DIR}/config.yml", :green]
-      end
-
-      def config
-        return @config if defined?(@config)
-
-        cfg = TTY::Config.new
-        cfg.append_path(CONFIG_DIR)
-        cfg.filename = "config"
-        cfg.extname = ".yml"
-        cfg.read if cfg.exist?
-        @config = cfg
-      end
-
-      def build_logger(verbose_flag)
-        enable_verbose = verbose_flag || ENV.fetch("DEVAGENT_VERBOSE", nil)&.match?(/^(1|true|yes)$/i)
-        return nil unless enable_verbose
-
-        if defined?(@logger) && @logger
-          @logger.level = :debug
-          return @logger
-        end
-
-        @logger = TTY::Logger.new(output: $stdout) do |logger|
-          logger.level = :debug
-        end
-      end
-
-      def load_context
-        ctx = Context.build(Dir.pwd)
-        ctx
-      rescue StandardError => e
-        say Paint["Warning: Unable to build repository context (#{e.message}).", :yellow]
-        nil
-      end
+    def context_overrides
+      overrides = {}
+      overrides["provider"] = options[:provider] if options[:provider]
+      overrides["model"] = options[:model] if options[:model]
+      overrides["planner_model"] = options[:planner_model] if options[:planner_model]
+      overrides["developer_model"] = options[:developer_model] if options[:developer_model]
+      overrides["reviewer_model"] = options[:reviewer_model] if options[:reviewer_model]
+      overrides["embed_model"] = options[:embed_model] if options[:embed_model]
+      overrides
     end
   end
 end
