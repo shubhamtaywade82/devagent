@@ -171,7 +171,7 @@ RSpec.describe Devagent::Orchestrator do
       orchestrator = described_class.new(context, output: output)
       orchestrator.run("run cmd")
 
-      expect(tool_bus).to have_received(:invoke).with("type" => "exec.run", "args" => hash_including("command" => "bundle exec rubocop"))
+      expect(tool_bus).to have_received(:invoke).with("type" => "exec.run", "args" => hash_including("program" => "bundle"))
       expect(streamer).to have_received(:say).with(a_string_matching(/Step 1 failed/), hash_including(level: :error))
     end
 

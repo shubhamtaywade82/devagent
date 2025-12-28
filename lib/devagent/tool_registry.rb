@@ -287,16 +287,12 @@ module Devagent
           inputs_schema: {
             "type" => "object",
             "properties" => {
-              "command" => { "type" => ["string", "null"], "description" => "Shell command string (allowlisted). Prefer program+args when possible." },
-              "program" => { "type" => ["string", "null"], "description" => "Executable name (allowlisted), e.g. 'bundle'" },
-              "args" => { "type" => ["array", "null"], "items" => { "type" => "string" }, "description" => "Arguments array for program invocation" },
+              "program" => { "type" => "string", "description" => "Executable name (allowlisted), e.g. 'bundle'" },
+              "args" => { "type" => "array", "items" => { "type" => "string" }, "description" => "Arguments array for program invocation" },
               "accepted_exit_codes" => { "type" => ["array", "null"], "items" => { "type" => "integer" }, "description" => "Non-zero exit codes that are acceptable for this step" },
               "allow_failure" => { "type" => ["boolean", "null"], "description" => "If true, do not fail the step on non-zero exit" }
             },
-            "anyOf" => [
-              { "required" => ["command"] },
-              { "required" => ["program"] }
-            ]
+            "required" => ["program", "args"]
           },
           outputs_schema: {
             "type" => "object",
@@ -323,12 +319,12 @@ module Devagent
           examples: {
             "valid" => [
               {
-                "input" => { "command" => "bundle exec rspec" },
+                "input" => { "program" => "bundle", "args" => ["exec", "rspec"] },
                 "output" => { "stdout" => "...", "stderr" => "", "exit_code" => 0 }
               }
             ],
             "invalid" => [
-              { "input" => { "command" => "rm -rf /" }, "reason" => "Blocked by denylist" }
+              { "input" => { "program" => "rm", "args" => ["-rf", "/"] }, "reason" => "Blocked by denylist" }
             ]
           },
           handler: :run_command,

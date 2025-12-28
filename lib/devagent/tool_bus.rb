@@ -116,9 +116,10 @@ module Devagent
       command = args["command"] || default_test_command
       context.tracer.event("run_tests", command: command)
       return :skipped if dry_run?
-      raise Error, "command not allowed" unless command_allowed?(command)
+      tokens = Shellwords.split(command.to_s)
+      raise Error, "command not allowed" unless command_allowed?(tokens)
 
-      Util.run!(command, chdir: context.repo_path)
+      Util.run!(tokens, chdir: context.repo_path)
       :ok
     end
 
@@ -130,14 +131,13 @@ module Devagent
 
       context.tracer.event("check_command_help", command: base_cmd)
       return "skipped" if dry_run?
-      raise Error, "command not allowed" unless command_allowed?(base_cmd)
+      raise Error, "command not allowed" unless command_allowed?([base_cmd.to_s])
 
       # Try --help first, fall back to -h if that fails
       help_output = nil
       ["--help", "-h", "help"].each do |help_flag|
         begin
-          help_command = "#{base_cmd} #{help_flag}"
-          help_output = Util.run!(help_command, chdir: context.repo_path)
+          help_output = Util.run!([base_cmd.to_s, help_flag], chdir: context.repo_path)
           break
         rescue StandardError => e
           # Try next help flag
@@ -151,15 +151,12 @@ module Devagent
     end
 
     def run_command(args)
-      # Accept either a full command string or a structured program+args invocation.
-      command = args["command"]
-      program = args["program"]
-      argv = args["args"]
-      invocation = if program
-                     [program.to_s] + Array(argv).map(&:to_s)
-                   else
-                     command.to_s
-                   end
+      # Strict mode: only accept structured program+args.
+      # This avoids shell parsing and makes allowlisting deterministic.
+      raise Error, "exec.run no longer accepts a raw command string; use {program,args}" if args.key?("command")
+      program = args.fetch("program")
+      argv = args.fetch("args")
+      invocation = [program.to_s] + Array(argv).map(&:to_s)
 
       context.tracer.event("run_command", command: invocation.is_a?(Array) ? invocation.join(" ") : invocation)
       return({ "stdout" => "", "stderr" => "", "exit_code" => 0 }) if dry_run?
@@ -260,7 +257,9 @@ module Devagent
     end
 
     def command_allowed?(invocation)
-      cmd_str = invocation.is_a?(Array) ? invocation.join(" ") : invocation.to_s
+      return false unless invocation.is_a?(Array)
+
+      cmd_str = invocation.join(" ")
       cmd = cmd_str.strip
       return false if cmd.empty?
 
@@ -279,16 +278,10 @@ module Devagent
       ]
       return false if deny_patterns.any? { |re| cmd.match?(re) }
 
-      # Reject common shell metacharacters when command is provided as a string.
-      # (Structured {program,args} avoids shell interpretation entirely.)
-      if !invocation.is_a?(Array) && cmd.match?(/[;&|`]/)
-        return false
-      end
-
       allow = Array(context.config.dig("auto", "command_allowlist")).map { |x| x.to_s.strip }.reject(&:empty?)
       return false if allow.empty? # deny-by-default
 
-      tokens = invocation.is_a?(Array) ? invocation : Shellwords.split(cmd)
+      tokens = invocation
       prog = tokens.first.to_s
       return false if prog.empty?
 

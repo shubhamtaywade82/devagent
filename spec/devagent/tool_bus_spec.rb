@@ -105,7 +105,7 @@ RSpec.describe Devagent::ToolBus do
     it "executes provided command" do
       config["auto"]["command_allowlist"] = ["bundle"]
       expect(tool_bus.run_tests("command" => "bundle exec rspec")).to eq(:ok)
-      expect(Devagent::Util).to have_received(:run!).with("bundle exec rspec", chdir: repo)
+      expect(Devagent::Util).to have_received(:run!).with(["bundle", "exec", "rspec"], chdir: repo)
     end
 
     it "skips when dry run is enabled" do
@@ -124,22 +124,22 @@ RSpec.describe Devagent::ToolBus do
     end
 
     it "runs arbitrary commands inside the repo" do
-      result = tool_bus.run_command("command" => "echo hi")
+      result = tool_bus.run_command("program" => "echo", "args" => ["hi"])
 
       expect(result).to include("stdout" => "output\n", "stderr" => "", "exit_code" => 0)
-      expect(Devagent::Util).to have_received(:run_capture).with("echo hi", chdir: repo)
+      expect(Devagent::Util).to have_received(:run_capture).with(["echo", "hi"], chdir: repo)
     end
 
     it "skips command execution in dry run" do
       config["auto"]["dry_run"] = true
 
-      expect(tool_bus.run_command("command" => "echo hi")).to eq({ "stdout" => "", "stderr" => "", "exit_code" => 0 })
+      expect(tool_bus.run_command("program" => "echo", "args" => ["hi"])).to eq({ "stdout" => "", "stderr" => "", "exit_code" => 0 })
       expect(Devagent::Util).not_to have_received(:run_capture)
     end
 
     it "blocks dangerous commands" do
       expect {
-        tool_bus.run_command("command" => "rm -rf /")
+        tool_bus.run_command("program" => "rm", "args" => ["-rf", "/"])
       }.to raise_error(Devagent::Error, /command not allowed/)
     end
 
@@ -149,14 +149,14 @@ RSpec.describe Devagent::ToolBus do
         { "stdout" => "x" * 50, "stderr" => "", "exit_code" => 0, "success" => true }
       )
 
-      result = tool_bus.run_command("command" => "echo hi")
+      result = tool_bus.run_command("program" => "echo", "args" => ["hi"])
       expect(result["stdout"]).to include("... (truncated to 10 bytes)")
     end
 
     it "returns a structured timeout result when the command times out" do
       allow(Timeout).to receive(:timeout).and_raise(Timeout::Error)
 
-      result = tool_bus.run_command("command" => "echo hi")
+      result = tool_bus.run_command("program" => "echo", "args" => ["hi"])
       expect(result).to include("exit_code" => 124)
       expect(result["stderr"]).to include("timed out")
     end

@@ -211,6 +211,8 @@ DevAgent can use these tools:
 
 All file modifications are applied via controller-generated diffs. The language model never writes files directly.
 
+`exec.run` uses a structured command form (program + args), not a raw shell string.
+
 ---
 
 ## Safety Features

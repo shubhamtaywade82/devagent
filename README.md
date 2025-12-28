@@ -158,7 +158,7 @@ If enabled, Devagent only exposes **read-only** git helpers (e.g., status/diff).
 
 ## Command execution safety (important)
 
-`exec.run` is allowlisted and denylisted. The allowlist is by **program name** (first token), not a string prefix. Avoid allowing shell interpreters (e.g., `bash`) unless you fully trust the environment.
+`exec.run` only accepts **structured commands**: `program` + `args` (no raw shell command strings). This avoids shell parsing and makes allowlisting deterministic. Avoid allowing shell interpreters (e.g., `bash`) unless you fully trust the environment.
 
 ## Tooling & Scripts
 

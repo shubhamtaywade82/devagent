@@ -9,6 +9,7 @@ require_relative "intent_classifier"
 require_relative "diff_generator"
 require_relative "decision_engine"
 require_relative "success_verifier"
+require "shellwords"
 
 module Devagent
   # Orchestrator coordinates planning, execution, and testing loops.
@@ -217,13 +218,17 @@ module Devagent
         ensure_read_same_path!(state, path)
         tool_invoke_with_policy(state, "fs.delete", "path" => path.to_s)
       when "exec.run", "run_command", "run_tests"
-        # Back-compat: run_command/run_tests map onto exec.run
-        cmd = command
-        cmd ||= "bundle exec rspec" if action == "run_tests"
+        # Back-compat: string commands are parsed into program+args.
+        # exec.run itself only accepts structured invocations.
+        cmd = command.to_s
+        cmd = "bundle exec rspec" if action == "run_tests" && cmd.strip.empty?
+        tokens = Shellwords.split(cmd)
+        raise Error, "command required" if tokens.empty?
         tool_invoke_with_policy(
           state,
           "exec.run",
-          "command" => cmd,
+          "program" => tokens.first,
+          "args" => tokens.drop(1),
           "accepted_exit_codes" => step["accepted_exit_codes"],
           "allow_failure" => step["allow_failure"]
         )
