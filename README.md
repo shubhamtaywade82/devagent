@@ -196,6 +196,8 @@ bundle exec rake spec
 
 ### Ubuntu/Debian local setup notes
 
+This section is for **developing this repo** (running specs, hacking on the gem). It does **not** change how `gem install devagent` behaves for end users.
+
 On a fresh Ubuntu/Debian machine, you may need system packages for Ruby + native extensions:
 
 ```bash
@@ -203,7 +205,7 @@ sudo apt-get update
 sudo apt-get install -y ruby-full ruby-dev build-essential git libsqlite3-dev libyaml-dev
 ```
 
-This repo’s `Gemfile.lock` may require a specific Bundler version. If you see a Bundler version mismatch, install the locked version and use a local bundle path (avoids permissions issues and keeps gems in `vendor/`, which is gitignored):
+This repo’s `Gemfile.lock` may require a specific Bundler version. If you see a Bundler version mismatch, install the locked version. Using a **local bundle path** avoids permissions issues and keeps development gems inside this repo (in `vendor/`, which is gitignored):
 
 ```bash
 sudo gem install bundler -v 2.7.1 -N
