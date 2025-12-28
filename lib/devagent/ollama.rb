@@ -9,11 +9,13 @@ module Devagent
     # Client wraps HTTP calls to the Ollama server for generation, streaming, and embeddings.
     class Client
       DEFAULT_HOST = "http://localhost:11434"
+      DEFAULT_TIMEOUT_SECONDS = 300
 
       def initialize(config = {})
         host = config.fetch("host", DEFAULT_HOST)
         @base_uri = URI(host)
         @default_params = config.fetch("params", {})
+        @read_timeout = config.fetch("timeout", DEFAULT_TIMEOUT_SECONDS).to_i
       end
 
       def generate(prompt:, model:, params: {})
@@ -70,7 +72,7 @@ module Devagent
 
       def build_http
         Net::HTTP.new(base_uri.host, base_uri.port).tap do |http|
-          http.read_timeout = 300
+          http.read_timeout = @read_timeout
         end
       end
 

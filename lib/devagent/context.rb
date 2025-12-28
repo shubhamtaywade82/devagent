@@ -3,6 +3,7 @@
 require "yaml"
 require_relative "embedding_index"
 require_relative "llm"
+require_relative "config"
 require_relative "memory"
 require_relative "ollama"
 require_relative "plugin_loader"
@@ -21,6 +22,15 @@ module Devagent
     def self.build(repo_path, overrides = {})
       config = load_config(repo_path)
       merged = deep_merge(config, stringify_keys(overrides))
+
+      # Resolve Ollama config without depending on repo/cwd.
+      cli_host = overrides.dig("ollama", "host") || overrides.dig(:ollama, :host)
+      host, _host_source = Devagent::Config.resolve_ollama_host(cli_host: cli_host)
+      timeout, _timeout_source = Devagent::Config.resolve_ollama_timeout_seconds
+      merged["ollama"] ||= {}
+      merged["ollama"]["host"] = host
+      merged["ollama"]["timeout"] = timeout
+
       new(repo_path, merged, overrides: overrides)
     end
 
