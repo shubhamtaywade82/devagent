@@ -193,13 +193,8 @@ module Devagent
         raise Error, "file already exists: #{path}" if File.exist?(File.join(context.repo_path, path.to_s))
 
         raise Error, "content required" if content.to_s.empty?
-        diff = DiffGenerator.new(context).generate(
-          path: path.to_s,
-          original: "",
-          goal: plan.goal.to_s,
-          reason: "Create file with provided content.\n\n#{step["reason"]}\n\nTARGET CONTENT:\n#{content}",
-          file_exists: false
-        )
+        # Deterministic add-file diff generation (do not rely on model formatting).
+        diff = build_add_file_diff(path: path.to_s, content: content.to_s)
 
         tool_invoke_with_policy(state, "fs.write_diff", "path" => path.to_s, "diff" => diff)
       when "fs.write", "fs_write"
@@ -246,7 +241,17 @@ module Devagent
       result = context.tool_bus.invoke("type" => tool_name, "args" => args)
       record_artifacts(state, tool_name, args, result)
 
-      { "success" => true, "artifact" => result }
+      success =
+        if tool_name == "exec.run"
+          exit_code = result.is_a?(Hash) ? result["exit_code"].to_i : 0
+          accepted = Array(args["accepted_exit_codes"]).map(&:to_i)
+          allow_failure = args["allow_failure"] == true
+          exit_code == 0 || allow_failure || accepted.include?(exit_code)
+        else
+          true
+        end
+
+      { "success" => success, "artifact" => result }
     end
 
     def record_artifacts(state, tool_name, args, result)
@@ -713,6 +718,26 @@ module Devagent
       # Return last N lines with a note
       truncated = output_lines.last(lines).join("\n")
       "#{truncated}\n... (showing last #{lines} of #{output_lines.size} lines)"
+    end
+
+    # Build a minimal unified diff for creating a new file from scratch.
+    #
+    # This is controller-owned and deterministic; it avoids relying on model-produced diff formatting.
+    def build_add_file_diff(path:, content:)
+      raise Error, "content required" if content.to_s.empty?
+
+      lines = content.to_s.lines
+      raise Error, "content required" if lines.empty?
+
+      hunk_lines = lines.map { |line| "+#{line}" }.join
+      hunk_count = lines.size
+
+      <<~DIFF
+        --- /dev/null
+        +++ b/#{path}
+        @@ -0,0 +1,#{hunk_count} @@
+        #{hunk_lines}
+      DIFF
     end
   end
 end
