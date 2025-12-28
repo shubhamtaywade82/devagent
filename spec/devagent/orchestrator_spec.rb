@@ -39,12 +39,14 @@ RSpec.describe Devagent::Orchestrator do
       tools_for_phase: {
         "fs.read" => double(name: "fs.read", description: "read"),
         "fs.write" => double(name: "fs.write", description: "write"),
-        "fs.create" => double(name: "fs.create", description: "create")
+        "fs.create" => double(name: "fs.create", description: "create"),
+        "exec.run" => double(name: "exec.run", description: "run")
       },
       tools: {
         "fs.read" => double(name: "fs.read", description: "read"),
         "fs.write" => double(name: "fs.write", description: "write"),
         "fs.create" => double(name: "fs.create", description: "create"),
+        "exec.run" => double(name: "exec.run", description: "run"),
         "fs.write_diff" => double(name: "fs.write_diff", description: "internal")
       },
       fetch: double(allowed_phases: %i[execution])
@@ -136,6 +138,77 @@ RSpec.describe Devagent::Orchestrator do
         "type" => "fs.write_diff",
         "args" => hash_including("path" => "spec/tmp_created.rb")
       )
+    end
+
+    it "treats non-zero exec.run exit codes as step failures by default" do
+      failing_plan = Devagent::Plan.new(
+        plan_id: "cmd-plan",
+        goal: "Run a failing command",
+        assumptions: [],
+        steps: [
+          {
+            "step_id" => 1,
+            "action" => "exec.run",
+            "path" => nil,
+            "command" => "bundle exec rubocop",
+            "content" => nil,
+            "reason" => "Run linter",
+            "depends_on" => [0]
+          }
+        ],
+        success_criteria: [],
+        rollback_strategy: "none",
+        confidence: 0.8
+      )
+
+      allow(planner).to receive(:plan).and_return(failing_plan)
+      allow(tool_bus).to receive(:invoke).and_return({ "stdout" => "", "stderr" => "offenses", "exit_code" => 1 })
+      allow(tool_bus).to receive(:changes_made?).and_return(false)
+      allow(Devagent::DecisionEngine).to receive(:new).and_return(
+        instance_double(Devagent::DecisionEngine, decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 })
+      )
+
+      orchestrator = described_class.new(context, output: output)
+      orchestrator.run("run cmd")
+
+      expect(tool_bus).to have_received(:invoke).with("type" => "exec.run", "args" => hash_including("command" => "bundle exec rubocop"))
+      expect(streamer).to have_received(:say).with(a_string_matching(/Step 1 failed/), hash_including(level: :error))
+    end
+
+    it "allows accepted non-zero exit codes for exec.run" do
+      allowed_plan = Devagent::Plan.new(
+        plan_id: "cmd-plan-2",
+        goal: "Run a command that returns 1",
+        assumptions: [],
+        steps: [
+          {
+            "step_id" => 1,
+            "action" => "exec.run",
+            "path" => nil,
+            "command" => "bundle exec rubocop",
+            "content" => nil,
+            "accepted_exit_codes" => [1],
+            "reason" => "Run linter and capture offenses",
+            "depends_on" => [0]
+          }
+        ],
+        success_criteria: [],
+        rollback_strategy: "none",
+        confidence: 0.8
+      )
+
+      allow(planner).to receive(:plan).and_return(allowed_plan)
+      allow(tool_bus).to receive(:invoke).and_return({ "stdout" => "", "stderr" => "offenses", "exit_code" => 1 })
+      allow(tool_bus).to receive(:changes_made?).and_return(false)
+      allow(Devagent::DecisionEngine).to receive(:new).and_return(
+        instance_double(Devagent::DecisionEngine, decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 })
+      )
+
+      orchestrator = described_class.new(context, output: output)
+      orchestrator.run("run cmd ok")
+
+      expect(tool_bus).to have_received(:invoke).with("type" => "exec.run", "args" => hash_including("accepted_exit_codes" => [1]))
+      expect(streamer).not_to have_received(:say).with(a_string_matching(/Step 1 failed/), anything)
     end
 
     it "stops early when plan has no actions" do

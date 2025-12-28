@@ -39,6 +39,8 @@ module Devagent
               "path" => { "type" => ["string", "null"] },
               "command" => { "type" => ["string", "null"] },
               "content" => { "type" => ["string", "null"] },
+              "accepted_exit_codes" => { "type" => ["array", "null"], "items" => { "type" => "integer" } },
+              "allow_failure" => { "type" => ["boolean", "null"] },
               "reason" => { "type" => "string" },
               "depends_on" => { "type" => "array", "items" => { "type" => "integer", "minimum" => 0 } }
             }
@@ -104,6 +106,8 @@ module Devagent
               "path" => step["path"],
               "command" => step["command"],
               "content" => step["content"],
+              "accepted_exit_codes" => step["accepted_exit_codes"],
+              "allow_failure" => step["allow_failure"],
               "reason" => step["reason"],
               "depends_on" => Array(step["depends_on"])
             }

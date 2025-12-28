@@ -5,6 +5,7 @@ require "English"
 require "fileutils"
 require "json"
 require "json-schema"
+require "shellwords"
 require "timeout"
 require_relative "safety"
 require_relative "util"
@@ -150,17 +151,26 @@ module Devagent
     end
 
     def run_command(args)
-      command = args.fetch("command")
-      context.tracer.event("run_command", command: command)
+      # Accept either a full command string or a structured program+args invocation.
+      command = args["command"]
+      program = args["program"]
+      argv = args["args"]
+      invocation = if program
+                     [program.to_s] + Array(argv).map(&:to_s)
+                   else
+                     command.to_s
+                   end
+
+      context.tracer.event("run_command", command: invocation.is_a?(Array) ? invocation.join(" ") : invocation)
       return({ "stdout" => "", "stderr" => "", "exit_code" => 0 }) if dry_run?
-      raise Error, "command not allowed" unless command_allowed?(command)
+      raise Error, "command not allowed" unless command_allowed?(invocation)
 
       timeout_s = (context.config.dig("auto", "command_timeout_seconds") || 60).to_i
       max_bytes = (context.config.dig("auto", "command_max_output_bytes") || 20_000).to_i
 
       result = nil
       Timeout.timeout(timeout_s) do
-        result = Util.run_capture(command, chdir: context.repo_path)
+        result = Util.run_capture(invocation, chdir: context.repo_path)
       end
 
       {
@@ -249,8 +259,9 @@ module Devagent
       end.first || "bundle exec rspec"
     end
 
-    def command_allowed?(command)
-      cmd = command.to_s.strip
+    def command_allowed?(invocation)
+      cmd_str = invocation.is_a?(Array) ? invocation.join(" ") : invocation.to_s
+      cmd = cmd_str.strip
       return false if cmd.empty?
 
       deny_patterns = [
@@ -268,11 +279,31 @@ module Devagent
       ]
       return false if deny_patterns.any? { |re| cmd.match?(re) }
 
-      allow = Array(context.config.dig("auto", "command_allowlist"))
-      # Empty allowlist means "deny by default" for safety.
-      return false if allow.empty?
+      # Reject common shell metacharacters when command is provided as a string.
+      # (Structured {program,args} avoids shell interpretation entirely.)
+      if !invocation.is_a?(Array) && cmd.match?(/[;&|`]/)
+        return false
+      end
 
-      allow.any? { |prefix| cmd.start_with?(prefix.to_s) }
+      allow = Array(context.config.dig("auto", "command_allowlist")).map { |x| x.to_s.strip }.reject(&:empty?)
+      return false if allow.empty? # deny-by-default
+
+      tokens = invocation.is_a?(Array) ? invocation : Shellwords.split(cmd)
+      prog = tokens.first.to_s
+      return false if prog.empty?
+
+      # Primary allowlist: allow only known programs.
+      return false unless allow.include?(prog)
+
+      # Extra guard: disallow launching an interactive shell unless explicitly allowlisted.
+      forbidden_shells = %w[bash sh zsh fish].freeze
+      if (tokens & forbidden_shells).any? && !allow.any? { |a| forbidden_shells.include?(a) }
+        return false
+      end
+
+      true
+    rescue ArgumentError
+      false
     end
 
     def validate_diff!(path, diff)

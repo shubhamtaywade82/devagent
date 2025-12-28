@@ -11,7 +11,7 @@ RSpec.describe Devagent::ToolBus do
         "allowlist" => ["**/*"],
         "denylist" => [],
         "dry_run" => false,
-        "command_allowlist" => ["bundle exec", "echo", "ruby"],
+        "command_allowlist" => ["bundle", "echo", "ruby"],
         "command_timeout_seconds" => 5,
         "command_max_output_bytes" => 10_000
       }
@@ -103,6 +103,7 @@ RSpec.describe Devagent::ToolBus do
     end
 
     it "executes provided command" do
+      config["auto"]["command_allowlist"] = ["bundle"]
       expect(tool_bus.run_tests("command" => "bundle exec rspec")).to eq(:ok)
       expect(Devagent::Util).to have_received(:run!).with("bundle exec rspec", chdir: repo)
     end

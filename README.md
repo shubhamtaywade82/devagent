@@ -152,6 +152,14 @@ memory:
 
 All file modifications are applied via controller-generated diffs. The language model never writes files directly.
 
+## Git support (optional, read-only)
+
+If enabled, Devagent only exposes **read-only** git helpers (e.g., status/diff). It does **not** stage, commit, reset, or push.
+
+## Command execution safety (important)
+
+`exec.run` is allowlisted and denylisted. The allowlist is by **program name** (first token), not a string prefix. Avoid allowing shell interpreters (e.g., `bash`) unless you fully trust the environment.
+
 ## Tooling & Scripts
 
 - `script/audit_devagent.rb` — static audit that checks repository structure and configuration, printing ✅/⚠️/❌ status.

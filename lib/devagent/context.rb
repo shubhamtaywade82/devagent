@@ -77,7 +77,8 @@ module Devagent
           "max_iterations" => 3,
           "require_tests_green" => true,
           "dry_run" => false,
-          "command_allowlist" => ["bundle exec", "ruby", "npm", "yarn", "rubocop", "rake", "make"],
+          # Allowlist is by program name (first token), not a string prefix.
+          "command_allowlist" => ["bundle", "ruby", "npm", "yarn", "rubocop", "rake", "make", "git"],
           "command_timeout_seconds" => 60,
           "command_max_output_bytes" => 20_000,
           "enable_git_tools" => false,

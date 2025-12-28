@@ -8,7 +8,12 @@ module Devagent
     module_function
 
     def run!(cmd, chdir: Dir.pwd)
-      stdout, stderr, status = Open3.capture3(cmd, chdir: chdir)
+      stdout, stderr, status =
+        if cmd.is_a?(Array)
+          Open3.capture3(*cmd, chdir: chdir)
+        else
+          Open3.capture3(cmd.to_s, chdir: chdir)
+        end
       raise "Command failed (#{cmd}):\nSTDOUT: #{stdout}\nSTDERR: #{stderr}" unless status.success?
 
       stdout
@@ -17,7 +22,12 @@ module Devagent
     # Run a command and always return output, even if exit code is non-zero
     # Useful for commands like rubocop that return non-zero to indicate issues found
     def run_capture(cmd, chdir: Dir.pwd)
-      stdout, stderr, status = Open3.capture3(cmd, chdir: chdir)
+      stdout, stderr, status =
+        if cmd.is_a?(Array)
+          Open3.capture3(*cmd, chdir: chdir)
+        else
+          Open3.capture3(cmd.to_s, chdir: chdir)
+        end
       {
         "stdout" => stdout,
         "stderr" => stderr,

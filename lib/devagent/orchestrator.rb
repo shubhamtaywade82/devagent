@@ -220,7 +220,13 @@ module Devagent
         # Back-compat: run_command/run_tests map onto exec.run
         cmd = command
         cmd ||= "bundle exec rspec" if action == "run_tests"
-        tool_invoke_with_policy(state, "exec.run", "command" => cmd)
+        tool_invoke_with_policy(
+          state,
+          "exec.run",
+          "command" => cmd,
+          "accepted_exit_codes" => step["accepted_exit_codes"],
+          "allow_failure" => step["allow_failure"]
+        )
       when "diagnostics.error_summary"
         tool_invoke_with_policy(state, "diagnostics.error_summary", "stderr" => command.to_s)
       else
