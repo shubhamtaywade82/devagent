@@ -34,7 +34,11 @@ RSpec.describe Devagent::Planner do
     {
       "confidence" => 0.9,
       "summary" => "Implement feature",
-      "actions" => [{ "type" => "fs_write", "args" => { "path" => "README.md", "content" => "text" } }]
+      "goal" => "Ship feature",
+      "steps" => [
+        { "id" => 1, "tool" => "fs_write", "args" => { "path" => "README.md", "content" => "text" }, "reason" => "Update docs" }
+      ],
+      "success_criteria" => ["README updated"]
     }.to_json
   end
 
@@ -63,6 +67,8 @@ RSpec.describe Devagent::Planner do
     expect(plan.confidence).to eq(0.9)
     expect(plan.summary).to eq("Implement feature")
     expect(plan.actions.length).to eq(1)
+    expect(plan.steps.length).to eq(1)
+    expect(plan.success_criteria).to include("README updated")
     expect(streamer).to have_received(:with_stream).with(:planner)
     expect(tokens).to include("{")
   end

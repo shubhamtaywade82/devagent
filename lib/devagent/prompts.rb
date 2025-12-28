@@ -20,10 +20,16 @@ module Devagent
       {
         "confidence": number (0-1),
         "summary": string,
-        "actions": [
-          {"type": string, "args": object|null}
-        ]
+        "goal": string,
+        "steps": [
+          {"id": integer, "tool": string, "args": object, "reason": string}
+        ],
+        "success_criteria": [string, ...]
       }
+      Notes:
+      - The controller executes steps exactly in order.
+      - Prefer minimal steps and keep args small and precise.
+      - Use only tools listed under "Available tools".
       Only return JSON. Never include commentary or markdown.
     PROMPT
 

@@ -5,17 +5,36 @@ require "json-schema"
 require_relative "prompts"
 
 module Devagent
-  Plan = Struct.new(:summary, :actions, :confidence, keyword_init: true)
+  Plan = Struct.new(:summary, :actions, :confidence, :goal, :steps, :success_criteria, keyword_init: true)
 
   # Planner coordinates with the planning and review models to produce
   # validated actions.
   class Planner
     PLAN_SCHEMA = {
       "type" => "object",
-      "required" => %w[confidence actions],
+      "required" => %w[confidence],
+      "anyOf" => [
+        { "required" => ["steps"] },
+        { "required" => ["actions"] }
+      ],
       "properties" => {
         "confidence" => { "type" => "number", "minimum" => 0, "maximum" => 1 },
         "summary" => { "type" => "string" },
+        "goal" => { "type" => "string" },
+        "success_criteria" => { "type" => "array", "items" => { "type" => "string" } },
+        "steps" => {
+          "type" => "array",
+          "items" => {
+            "type" => "object",
+            "required" => %w[id tool args reason],
+            "properties" => {
+              "id" => { "type" => "integer", "minimum" => 1 },
+              "tool" => { "type" => "string" },
+              "args" => { "type" => "object" },
+              "reason" => { "type" => "string" }
+            }
+          }
+        },
         "actions" => {
           "type" => "array",
           "items" => {
@@ -53,8 +72,28 @@ module Devagent
         payload = parse_plan(raw_plan)
         review = review_plan(task, raw_plan)
         if review["approved"] || attempts >= 1
-          break Plan.new(summary: payload["summary"], actions: payload["actions"] || [],
-                         confidence: payload["confidence"].to_f)
+          steps = Array(payload["steps"]).map do |step|
+            {
+              "id" => step["id"],
+              "tool" => step["tool"],
+              "args" => step["args"] || {},
+              "reason" => step["reason"]
+            }
+          end
+          actions = if !steps.empty?
+                      steps.map { |s| { "type" => s["tool"], "args" => s["args"] } }
+                    else
+                      Array(payload["actions"])
+                    end
+
+          break Plan.new(
+            summary: payload["summary"],
+            goal: payload["goal"],
+            steps: steps,
+            success_criteria: Array(payload["success_criteria"]),
+            actions: actions,
+            confidence: payload["confidence"].to_f
+          )
         end
 
         attempts += 1
@@ -106,7 +145,7 @@ module Devagent
       json
     rescue JSON::ParserError, JSON::Schema::ValidationError => e
       context.tracer.event("plan_invalid_json", message: e.message, raw: raw)
-      { "confidence" => 0.0, "summary" => "invalid plan", "actions" => [] }
+      { "confidence" => 0.0, "summary" => "invalid plan", "goal" => "", "steps" => [], "success_criteria" => [] }
     end
 
     def parse_review(raw)
