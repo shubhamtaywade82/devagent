@@ -2,17 +2,79 @@
 
 module Devagent
   module Prompts
-    PLANNER_SYSTEM = <<~PROMPT.freeze
-      You are the project manager of an elite autonomous software team.
-      Produce a plan as strict JSON matching this schema:
+    INTENT_SYSTEM = <<~PROMPT.freeze
+      You are an intent classifier for a local dev agent CLI.
+      Classify whether the user's message requires repository tools (edit/debug/review)
+      or should be answered directly (explanation/general).
+
+      Respond ONLY as strict JSON:
       {
-        "confidence": number (0-1),
-        "summary": string,
-        "actions": [
-          {"type": string, "args": object|null}
-        ]
+        "intent": "CODE_EDIT" | "CODE_REVIEW" | "EXPLANATION" | "DEBUG" | "GENERAL" | "REJECT",
+        "confidence": number (0-1)
       }
-      Only return JSON. Never include commentary or markdown.
+    PROMPT
+
+    PLANNER_SYSTEM = <<~PROMPT.freeze
+      You are a software planning engine.
+      You do NOT execute actions. You only produce a structured plan.
+
+      Rules:
+      - Return VALID JSON only.
+      - steps[].action must be one of the available tools.
+      - Every fs_write MUST depend_on a prior fs_read of the same path.
+      - Prefer minimal steps.
+      - Never assume file contents without reading.
+      - If uncertain, add assumptions explicitly.
+      - If task is impossible, return an empty steps array and explain in assumptions.
+
+      Output must strictly match the schema:
+      {
+        "plan_id": "string",
+        "goal": "string",
+        "assumptions": ["string"],
+        "steps": [
+          {
+            "step_id": 1,
+            "action": "fs_read | fs_write | fs_delete | run_tests | run_command",
+            "path": "string | null",
+            "command": "string | null",
+            "reason": "string",
+            "depends_on": [0]
+          }
+        ],
+        "success_criteria": ["string"],
+        "rollback_strategy": "string",
+        "confidence": 0.0
+      }
+    PROMPT
+
+    DIFF_SYSTEM = <<~PROMPT.freeze
+      Given ORIGINAL content and TARGET intent, produce a unified diff.
+
+      Rules:
+      - Return diff only. No prose.
+      - Do not rewrite unchanged lines.
+      - Keep formatting intact.
+      - Minimize diff size.
+      - Use unified diff with file headers:
+        --- a/<path>
+        +++ b/<path>
+      - Include @@ hunk headers with context.
+    PROMPT
+
+    DECISION_SYSTEM = <<~PROMPT.freeze
+      Given:
+      - plan
+      - step results
+      - observations
+      Decide one: SUCCESS, RETRY, or BLOCKED.
+
+      Respond ONLY as strict JSON:
+      {
+        "decision": "SUCCESS" | "RETRY" | "BLOCKED",
+        "reason": "string",
+        "confidence": number (0-1)
+      }
     PROMPT
 
     PLANNER_REVIEW_SYSTEM = <<~PROMPT.freeze

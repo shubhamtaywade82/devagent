@@ -36,6 +36,16 @@ module Devagent
       @changes_made
     end
 
+    def read_file(args)
+      relative_path = args.fetch("path")
+      guard_path!(relative_path)
+      full = File.join(context.repo_path, relative_path)
+      context.tracer.event("read_file", path: relative_path)
+      return "" unless File.exist?(full)
+
+      File.read(full, encoding: "UTF-8")
+    end
+
     def write_file(args)
       relative_path = args.fetch("path")
       content = args.fetch("content")
@@ -67,10 +77,41 @@ module Devagent
       patch
     end
 
+    def write_diff(args)
+      relative_path = args.fetch("path")
+      diff = args.fetch("diff")
+      guard_path!(relative_path)
+      validate_diff!(relative_path, diff)
+
+      context.tracer.event("fs_write_diff", path: relative_path)
+      return diff if dry_run?
+
+      # We intentionally use git apply because it is the most reliable diff applier
+      # for unified diffs and keeps behavior deterministic.
+      IO.popen(["git", "-C", context.repo_path, "apply", "--whitespace=nowarn", "-"], "w") { |io| io.write(diff) }
+      raise Error, "diff apply failed" unless $CHILD_STATUS&.success?
+
+      @changes_made = true
+      diff
+    end
+
+    def delete_file(args)
+      relative_path = args.fetch("path")
+      guard_path!(relative_path)
+      context.tracer.event("fs_delete", path: relative_path)
+      return :skipped if dry_run?
+
+      full = File.join(context.repo_path, relative_path)
+      FileUtils.rm_f(full)
+      @changes_made = true
+      :ok
+    end
+
     def run_tests(args)
       command = args["command"] || default_test_command
       context.tracer.event("run_tests", command: command)
       return :skipped if dry_run?
+      raise Error, "command not allowed" unless command_allowed?(command)
 
       Util.run!(command, chdir: context.repo_path)
       :ok
@@ -80,6 +121,7 @@ module Devagent
       command = args.fetch("command")
       context.tracer.event("run_command", command: command)
       return "skipped" if dry_run?
+      raise Error, "command not allowed" unless command_allowed?(command)
 
       Util.run!(command, chdir: context.repo_path)
     end
@@ -103,6 +145,35 @@ module Devagent
       context.plugins.filter_map do |plugin|
         plugin.respond_to?(:test_command) ? plugin.test_command(context) : nil
       end.first || "bundle exec rspec"
+    end
+
+    def command_allowed?(command)
+      cmd = command.to_s.strip
+      return false if cmd.empty?
+
+      deny_patterns = [
+        /\Agit\s+push\b/i,
+        /\Agit\s+commit\b/i,
+        /\Agit\s+reset\b/i,
+        /\Agit\s+clean\b/i,
+        /\Arm\s+/i,
+        /\Asudo\b/i
+      ]
+      return false if deny_patterns.any? { |re| cmd.match?(re) }
+
+      allow = Array(context.config.dig("auto", "command_allowlist"))
+      # Back-compat: nil/empty allowlist means allow any command.
+      return true if allow.empty?
+
+      allow.any? { |prefix| cmd.start_with?(prefix.to_s) }
+    end
+
+    def validate_diff!(path, diff)
+      lines = diff.to_s.lines
+      raise Error, "diff too large" if lines.count > 200
+      raise Error, "diff missing hunk context" unless diff.include?("@@")
+      expected = "--- a/#{path}"
+      raise Error, "path mismatch in diff" unless diff.to_s.start_with?(expected)
     end
   end
 end

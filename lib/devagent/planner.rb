@@ -5,12 +5,51 @@ require "json-schema"
 require_relative "prompts"
 
 module Devagent
-  Plan = Struct.new(:summary, :actions, :confidence, keyword_init: true)
+  Plan = Struct.new(
+    :plan_id,
+    :goal,
+    :assumptions,
+    :steps,
+    :success_criteria,
+    :rollback_strategy,
+    :confidence,
+    :actions,
+    :summary,
+    keyword_init: true
+  )
 
   # Planner coordinates with the planning and review models to produce
   # validated actions.
   class Planner
-    PLAN_SCHEMA = {
+    PLAN_SCHEMA_V2 = {
+      "type" => "object",
+      "required" => %w[plan_id goal assumptions steps success_criteria rollback_strategy confidence],
+      "properties" => {
+        "plan_id" => { "type" => "string" },
+        "goal" => { "type" => "string" },
+        "assumptions" => { "type" => "array", "items" => { "type" => "string" } },
+        "steps" => {
+          "type" => "array",
+          "items" => {
+            "type" => "object",
+            "required" => %w[step_id action path command reason depends_on],
+            "properties" => {
+              "step_id" => { "type" => "integer", "minimum" => 1 },
+              "action" => { "type" => "string" },
+              "path" => { "type" => %w[string null] },
+              "command" => { "type" => %w[string null] },
+              "reason" => { "type" => "string" },
+              "depends_on" => { "type" => "array", "items" => { "type" => "integer", "minimum" => 0 } }
+            }
+          }
+        },
+        "success_criteria" => { "type" => "array", "items" => { "type" => "string" } },
+        "rollback_strategy" => { "type" => "string" },
+        "confidence" => { "type" => "number", "minimum" => 0, "maximum" => 1 }
+      }
+    }.freeze
+
+    PLAN_SCHEMA_V1 = {
       "type" => "object",
       "required" => %w[confidence actions],
       "properties" => {
@@ -30,6 +69,10 @@ module Devagent
       }
     }.freeze
 
+    PLAN_SCHEMA = {
+      "anyOf" => [PLAN_SCHEMA_V2, PLAN_SCHEMA_V1]
+    }.freeze
+
     REVIEW_SCHEMA = {
       "type" => "object",
       "required" => %w[approved issues],
@@ -43,18 +86,52 @@ module Devagent
       @streamer = streamer
     end
 
-    def plan(task)
+    def plan(task, controller_feedback: nil, visible_tools: nil)
       attempts = 0
       feedback = nil
       raw_plan = nil
 
       loop do
-        raw_plan = generate_plan(task, feedback)
+        raw_plan = generate_plan(task, feedback, controller_feedback: controller_feedback, visible_tools: visible_tools)
         payload = parse_plan(raw_plan)
         review = review_plan(task, raw_plan)
         if review["approved"] || attempts >= 1
-          break Plan.new(summary: payload["summary"], actions: payload["actions"] || [],
-                         confidence: payload["confidence"].to_f)
+          steps = Array(payload["steps"]).map do |step|
+            {
+              "step_id" => step["step_id"],
+              "action" => step["action"],
+              "path" => step["path"],
+              "command" => step["command"],
+              "reason" => step["reason"],
+              "depends_on" => Array(step["depends_on"])
+            }
+          end
+
+          # Back-compat: allow legacy "actions" plans by wrapping into step form.
+          if steps.empty? && payload["actions"]
+            steps = Array(payload["actions"]).each_with_index.map do |action, idx|
+              {
+                "step_id" => idx + 1,
+                "action" => action["type"],
+                "path" => action.dig("args", "path"),
+                "command" => action.dig("args", "command"),
+                "reason" => "legacy action",
+                "depends_on" => []
+              }
+            end
+          end
+
+          break Plan.new(
+            plan_id: payload["plan_id"],
+            goal: payload["goal"] || payload["summary"],
+            assumptions: Array(payload["assumptions"]),
+            steps: steps,
+            success_criteria: Array(payload["success_criteria"]),
+            rollback_strategy: payload["rollback_strategy"].to_s,
+            confidence: payload["confidence"].to_f,
+            summary: (payload["goal"] || payload["summary"]).to_s,
+            actions: [] # no longer used for execution
+          )
         end
 
         attempts += 1
@@ -70,8 +147,8 @@ module Devagent
 
     attr_reader :context, :streamer
 
-    def generate_plan(task, feedback)
-      prompt = build_prompt(task, feedback)
+    def generate_plan(task, feedback, controller_feedback:, visible_tools:)
+      prompt = build_prompt(task, feedback, controller_feedback: controller_feedback, visible_tools: visible_tools)
       response_format = json_schema_format(PLAN_SCHEMA) if context.provider_for(:planner) == "openai"
       return stream_plan(prompt, response_format) if streamer
 
@@ -106,7 +183,15 @@ module Devagent
       json
     rescue JSON::ParserError, JSON::Schema::ValidationError => e
       context.tracer.event("plan_invalid_json", message: e.message, raw: raw)
-      { "confidence" => 0.0, "summary" => "invalid plan", "actions" => [] }
+      {
+        "confidence" => 0.0,
+        "plan_id" => "",
+        "goal" => "",
+        "assumptions" => ["invalid plan JSON/schema"],
+        "steps" => [],
+        "success_criteria" => [],
+        "rollback_strategy" => ""
+      }
     end
 
     def parse_review(raw)
@@ -118,20 +203,34 @@ module Devagent
       { "approved" => true, "issues" => [] }
     end
 
-    def build_prompt(task, feedback)
-      retrieved = context.index.retrieve(task, limit: 6).map do |snippet|
-        "#{snippet["path"]}:\n#{snippet["text"]}\n---"
-      end.join("\n")
+    def build_prompt(task, feedback, controller_feedback:, visible_tools:)
+      # Context assembly discipline: after we have controller feedback (i.e., post-iteration),
+      # do not keep expanding context with long history or broad retrieval. Feed only reduced observations.
+      retrieved = ""
+      history = ""
+      if controller_feedback.to_s.strip.empty?
+        retrieved = context.index.retrieve(task, limit: 6).map do |snippet|
+          "#{snippet["path"]}:\n#{snippet["text"]}\n---"
+        end.join("\n")
 
-      history = context.session_memory.last_turns(8).map do |turn|
-        "#{turn["role"]}: #{turn["content"]}"
-      end.join("\n")
+        history = context.session_memory.last_turns(6).map do |turn|
+          "#{turn["role"]}: #{turn["content"]}"
+        end.join("\n")
+      end
 
       plugin_guidance = context.plugins.filter_map do |plugin|
         plugin.on_prompt(context, task) if plugin.respond_to?(:on_prompt)
       end.join("\n")
 
-      tools = context.tool_registry.tools.values.map do |tool|
+      tool_values = if visible_tools
+                      Array(visible_tools)
+                    elsif context.tool_registry.respond_to?(:tools_for_phase)
+                      context.tool_registry.tools_for_phase(:planning).values
+                    else
+                      context.tool_registry.tools.values
+                    end
+
+      tools = tool_values.map do |tool|
         "- #{tool.name}: #{tool.description}"
       end.join("\n")
 
@@ -140,6 +239,12 @@ module Devagent
                          else
                            ""
                          end
+
+      controller_section = if controller_feedback && !controller_feedback.to_s.strip.empty?
+                             "Controller observations (normalized):\n#{controller_feedback}"
+                           else
+                             ""
+                           end
 
       <<~PROMPT
         #{Prompts::PLANNER_SYSTEM}
@@ -156,6 +261,7 @@ module Devagent
         #{retrieved}
 
         #{feedback_section}
+        #{controller_section}
 
         Task:
         #{task}
