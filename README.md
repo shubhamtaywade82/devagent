@@ -61,6 +61,8 @@ devagent config
 devagent diag
 ```
 
+Note: Devagent does **not** auto-load `.env` / dotenv files from the current directory. Use `OLLAMA_HOST` or `~/.devagent.yml` instead.
+
 ### Configuration (`.devagent.yml`)
 
 ```yaml
@@ -81,7 +83,8 @@ openai:
     num_gpu: 0
     num_ctx: 2048
 ollama:
-  host: "http://localhost:11434"
+  # Note: Ollama host is resolved globally (CLI/ENV/~/.devagent.yml/default), not from this project file.
+  # Use `devagent config` to see the effective value.
   timeout: 300
   params:
     temperature: 0.2

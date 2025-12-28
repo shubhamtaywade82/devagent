@@ -47,7 +47,7 @@ DevAgent follows a **Layered Clean Architecture** combined with an **Event-Drive
 
 **Benefits:**
 - **Swappable providers** (Ollama ↔ OpenAI)
-- **Extensible tools** (fs_write → docker_build)
+- **Extensible tools** (fs.write → docker_build)
 - **Reusable domain logic** (Planner works for any Ruby project)
 - **Testable** (mock LLM, mock ToolBus)
 
@@ -296,10 +296,11 @@ composite = AgentComposite.new([
 
 ```ruby
 ToolRegistry.default.tools = [
-  Tool.new(name: "fs_write", handler: :write_file, schema: {...}),
-  Tool.new(name: "git_apply", handler: :apply_patch, schema: {...}),
-  Tool.new(name: "run_tests", handler: :run_tests, schema: {...}),
-  Tool.new(name: "run_command", handler: :run_command, schema: {...})
+  Tool.new(name: "fs.read", handler: :read_file, schema: {...}),
+  Tool.new(name: "fs.write", handler: nil, schema: {...}),        # logical-only (controller applies diff)
+  Tool.new(name: "fs.create", handler: nil, schema: {...}),       # logical-only (controller applies diff)
+  Tool.new(name: "exec.run", handler: :run_command, schema: {...}), # ToolBus method name
+  Tool.new(name: "fs.delete", handler: :delete_file, schema: {...})
 ]
 ```
 
@@ -442,7 +443,7 @@ end
 
 **Extension points:**
 - Plugins can override `on_prompt`, `on_action`, `on_post_edit`
-- Subclasses can override `execute_actions`, `run_tests`
+- Subclasses can override `execute_actions`, and execution/testing policy (e.g., via `exec.run`)
 
 ---
 
@@ -674,7 +675,7 @@ end
       ↓
  [ToolRegistry (Command Registry)]
       ↓
- [fs_write, git_apply, run_tests (Commands)]
+[fs.read, fs.write, fs.create, exec.run (Commands)]
       ↓
  [Safety (Policy/Guard)]
       ↓

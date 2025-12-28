@@ -24,25 +24,12 @@ devagent --provider openai
 
 # Use Ollama (local)
 devagent --provider ollama
-
-# Or use provider-specific commands (if available)
-devagent openai
-devagent ollama
 ```
 
 ### 3. Start Using It
 
 Once started, you'll see:
 ```
-🔌 Devagent Provider Configuration
-  Provider: ollama
-  Host: http://localhost:11434
-  Models:
-    planner: llama3.2:3b
-    developer: llama3.2:3b
-    reviewer: llama3.1:8b
-  Embeddings: ollama (nomic-embed-text)
-
 ℹ info    Devagent ready. Type 'exit' to quit.
 devagent>
 ```
@@ -96,7 +83,8 @@ reviewer_model: "llama3.1:8b"
 embed_model: "nomic-embed-text"
 
 ollama:
-  host: "http://localhost:11434"
+  params:
+    temperature: 0.2
 
 openai:
   uri_base: "http://localhost:11434"
@@ -182,8 +170,8 @@ devagent> add a factorial function to lib/math.rb
 [⠇] Planning ...
 Plan: Add factorial function (85%)
 
-[1/2] fs_read lib/math.rb
-[2/2] fs_write lib/math.rb
+[1/2] fs.read lib/math.rb
+[2/2] fs.write lib/math.rb
 [⠇] Running tests ...
 ✓ Tests passed
 
@@ -262,13 +250,12 @@ DevAgent will:
 ## Troubleshooting
 
 ### "No chunks indexed"
-- **With Ollama**: Expected - embeddings disabled for stability
-- **With OpenAI**: Check if embeddings are working
-- **Solution**: Use `devagent openai` for full features
+- Check your embedding provider/model settings and connectivity.
+- Run: `devagent diag` and `devagent test`
 
 ### "Connection refused"
 - Check if Ollama server is running
-- Verify host in `.devagent.yml`
+- Verify host via `devagent config` (and/or `OLLAMA_HOST`, `~/.devagent.yml`, `--ollama-host`)
 - Test: `curl http://localhost:11434/api/tags`
 
 ### "Plan rejected"
@@ -344,8 +331,8 @@ In the REPL:
 
 ## Limitations
 
-⚠️ **No Code Context with Native Ollama**
-- Use `devagent openai` for better results
+⚠️ **Environment dependencies**
+- Devagent will not install system dependencies for you (Ruby, Bundler, Node, etc.). Ensure your environment is set up first.
 
 ⚠️ **File Access Restrictions**
 - Only files in allowlist

@@ -549,7 +549,7 @@ module Devagent
         path = s["path"].to_s
         deps = Array(s["depends_on"]).map(&:to_i)
         dep_paths = deps.filter_map { |id| reads[id] }
-        raise Error, "fs_write must depend_on prior fs_read of same path (#{path})" unless dep_paths.include?(path)
+        raise Error, "fs.write must depend_on prior fs.read of same path (#{path})" unless dep_paths.include?(path)
       end
     end
 
