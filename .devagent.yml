@@ -16,8 +16,8 @@ provider: ollama
 model: "deepseek-coder:6.7b" # Code-focused model, excellent for structured outputs
 planner_model: "deepseek-coder:6.7b" # Code models handle JSON/structured planning well
 developer_model: "deepseek-coder:6.7b" # Code models generate better diffs
-reviewer_model: "mistral:7b-instruct" # Good for code review and analysis
-embed_model: "nomic-embed-text"
+reviewer_model: "mistral:7b-instruct" # Good for code review and analysis (available)
+embed_model: "nomic-embed-text:latest" # Embedding model (use :latest tag for latest version)
 
 # OpenAI models (use with --provider openai)
 # Uncomment to use OpenAI models by default:

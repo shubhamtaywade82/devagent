@@ -53,6 +53,22 @@ module Devagent
       intent = with_spinner("Classifying") { IntentClassifier.new(context).classify(task) }
       state.intent = intent["intent"]
       state.intent_confidence = intent["confidence"].to_f
+
+      # Override classification for explicit modification requests
+      # "modify X", "improve X", "refactor X" with file paths should be CODE_EDIT
+      if %w[EXPLANATION GENERAL].include?(state.intent)
+        task_lower = task.to_s.downcase
+        has_file_path = task_lower.match?(/\b([a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
+        is_modify_request = task_lower.match?(/\b(modify|improve|refactor|enhance|update|change)\s+.*\b(to|it|this)\b/i) ||
+                            task_lower.match?(/\b(modify|improve|refactor|enhance|update|change)\s+[a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json)\b/i)
+
+        if has_file_path && is_modify_request
+          state.intent = "CODE_EDIT"
+          state.intent_confidence = [state.intent_confidence, 0.8].max
+          context.tracer.event("intent_override", original: intent["intent"], new: "CODE_EDIT", reason: "modify request with file path")
+        end
+      end
+
       context.tracer.event("intent", intent: state.intent, confidence: state.intent_confidence)
 
       if %w[EXPLANATION GENERAL].include?(state.intent)
@@ -136,11 +152,35 @@ module Devagent
               streamer.say("Planning generated low confidence for code edit. Attempting to create minimal plan...",
                            level: :warn)
             end
-            minimal_plan = create_minimal_edit_plan(task)
+            # Check if this is a file creation request
+            is_create_request = task.to_s.downcase.match?(/\b(create|new|add)\s+(?:a\s+)?(?:new\s+)?file\b/i)
+            minimal_plan = if is_create_request
+                             create_minimal_create_plan(task)
+                           else
+                             create_minimal_edit_plan(task)
+                           end
             if minimal_plan
               state.plan = minimal_plan
               state.phase = :execution
               next
+            else
+              # If minimal plan creation failed, provide helpful error message
+              if is_create_request
+                # Try to extract the path to give a specific error
+                file_path_match = task.to_s.match(/\b(?:create|new|add)\s+(?:a\s+)?(?:new\s+)?file\s+([a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
+                file_path = file_path_match ? file_path_match[1] : nil
+                unless file_path
+                  any_match = task.to_s.match(/\b([a-zA-Z0-9_\-\.\/]+\/(?:[a-zA-Z0-9_\-\.\/]+\/)*[a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
+                  file_path = any_match[1] if any_match
+                end
+                if file_path && !context.tool_bus.safety.allowed?(file_path)
+                  unless quiet?
+                    streamer.say("Cannot create file: '#{file_path}' is in the denylist or not in the allowlist.", level: :warn)
+                    streamer.say("Please use an allowed path (e.g., 'lib/hello.rb' instead of 'tmp/hello.rb').", level: :info)
+                  end
+                  return
+                end
+              end
             end
           end
 
@@ -537,8 +577,12 @@ module Devagent
                        end
 
       retrieved = if use_repo_context
-                    safe_index_retrieve(task, limit: 6).map do |snippet|
-                      "#{snippet["path"]}:\n#{snippet["text"]}\n---"
+                    # Reduce to 4 snippets to avoid prompt truncation
+                    safe_index_retrieve(task, limit: 4).map do |snippet|
+                      # Truncate long snippets
+                      text = snippet["text"].to_s
+                      text = text.length > 500 ? "#{text[0..500]}... (truncated)" : text
+                      "#{snippet["path"]}:\n#{text}\n---"
                     end.join("\n")
                   else
                     ""
@@ -565,8 +609,12 @@ module Devagent
                         ""
                       end
 
-      history = safe_session_history(limit: 6).map do |turn|
-        "#{turn["role"]}: #{turn["content"]}"
+      # Reduce history to 3 turns to save tokens
+      history = safe_session_history(limit: 3).map do |turn|
+        content = turn["content"].to_s
+        # Truncate long history entries
+        content = content.length > 200 ? "#{content[0..200]}... (truncated)" : content
+        "#{turn["role"]}: #{content}"
       end.join("\n")
 
       <<~PROMPT
@@ -596,8 +644,12 @@ module Devagent
         command_output += "\n---\n"
       end
 
-      history = safe_session_history(limit: 6).map do |turn|
-        "#{turn["role"]}: #{turn["content"]}"
+      # Reduce history to 3 turns to save tokens
+      history = safe_session_history(limit: 3).map do |turn|
+        content = turn["content"].to_s
+        # Truncate long history entries
+        content = content.length > 200 ? "#{content[0..200]}... (truncated)" : content
+        "#{turn["role"]}: #{content}"
       end.join("\n")
 
       <<~PROMPT
@@ -1028,15 +1080,22 @@ module Devagent
       # This handles simple cases like "add a comment at the top of file.rb"
 
       # Extract file path from common patterns
-      # Patterns: "add X to file.rb", "add X at the top of file.rb", "add X in file.rb"
-      file_path_match = task.to_s.match(/\b(?:at\s+the\s+top\s+of|in|to|at)\s+([a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
+      # Patterns: "add X to file.rb", "add X at the top of file.rb", "add X in file.rb", "modify lib/file.rb"
+      file_path_match = task.to_s.match(/\b(?:at\s+the\s+top\s+of|in|to|at|modify|update|change|edit|refactor|improve)\s+([a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
       file_path = file_path_match ? file_path_match[1] : nil
 
-      # If no file path found, try to extract from the end of the task
+      # If no file path found, try to extract from anywhere in the task
       unless file_path
-        # Look for file paths at the end: "add comment lib/file.rb"
-        end_match = task.to_s.match(/\s+([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)\s*$/i)
-        file_path = end_match[1] if end_match
+        # Look for file paths with common extensions anywhere in the text
+        # Matches patterns like "lib/file.rb", "src/file.js", etc.
+        any_match = task.to_s.match(/\b([a-zA-Z0-9_\-\.\/]+\/(?:[a-zA-Z0-9_\-\.\/]+\/)*[a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
+        file_path = any_match[1] if any_match
+      end
+
+      # If still no match, try simple filename patterns
+      unless file_path
+        simple_match = task.to_s.match(/\b([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)\b/i)
+        file_path = simple_match[1] if simple_match
       end
 
       unless file_path
@@ -1076,6 +1135,160 @@ module Devagent
         success_criteria: ["File read and modified successfully"],
         confidence: 0.8
       )
+    end
+
+    def create_minimal_create_plan(task)
+      # Create a simple plan for file creation tasks when planner fails
+      # This handles cases like "create a new file lib/hello.rb that prints hello"
+
+      # Extract file path - look for patterns like "create file path/to/file.rb"
+      file_path_match = task.to_s.match(/\b(?:create|new|add)\s+(?:a\s+)?(?:new\s+)?file\s+([a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
+      file_path = file_path_match ? file_path_match[1] : nil
+
+      # If no match, try to find file path anywhere in the text
+      unless file_path
+        any_match = task.to_s.match(/\b([a-zA-Z0-9_\-\.\/]+\/(?:[a-zA-Z0-9_\-\.\/]+\/)*[a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
+        file_path = any_match[1] if any_match
+      end
+
+      # If still no match, try simple filename
+      unless file_path
+        simple_match = task.to_s.match(/\b([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)\b/i)
+        file_path = simple_match[1] if simple_match
+      end
+
+      unless file_path
+        context.tracer.event("minimal_create_plan_failed", reason: "Could not extract file path from task", task: task.to_s) if context.respond_to?(:tracer)
+        return nil
+      end
+
+      # Validate the file path is allowed
+      unless context.tool_bus.safety.allowed?(file_path)
+        context.tracer.event("minimal_create_plan_failed", reason: "File path not allowed (may be in denylist)", path: file_path) if context.respond_to?(:tracer)
+        return nil
+      end
+
+      # Generate file content based on the task description
+      # Extract what the file should do from the task
+      content_description = task.to_s
+      # Remove the "create file X" part to get the content description
+      content_description = content_description.gsub(/\b(?:create|new|add)\s+(?:a\s+)?(?:new\s+)?file\s+[^\s]+\s*(?:that|which|to)?\s*/i, "").strip
+      # If nothing left, use the full task as description
+      content_description = task.to_s if content_description.empty?
+
+      # Generate content using LLM
+      file_content = generate_file_content(file_path, content_description, task)
+
+      # Create a simple plan: create the file with generated content
+      steps = [
+        {
+          "step_id" => 1,
+          "action" => "fs.create",
+          "path" => file_path,
+          "content" => file_content,
+          "reason" => task.to_s.strip,
+          "depends_on" => []
+        }
+      ]
+
+      Plan.new(
+        plan_id: "minimal_create_#{Time.now.to_i}",
+        goal: task,
+        assumptions: ["Using minimal plan: create new file with content based on task description"],
+        steps: steps,
+        success_criteria: ["File created successfully"],
+        confidence: 0.8
+      )
+    end
+
+    def generate_file_content(file_path, content_description, full_task)
+      # Generate file content using the developer model
+      # Determine file type from extension
+      ext = File.extname(file_path).downcase
+      language = case ext
+                 when ".rb"
+                   "Ruby"
+                 when ".js", ".jsx"
+                   "JavaScript"
+                 when ".ts", ".tsx"
+                   "TypeScript"
+                 when ".py"
+                   "Python"
+                 when ".java"
+                   "Java"
+                 when ".go"
+                   "Go"
+                 when ".rs"
+                   "Rust"
+                 when ".php"
+                   "PHP"
+                 when ".md"
+                   "Markdown"
+                 when ".txt"
+                   "Plain text"
+                 when ".yml", ".yaml"
+                   "YAML"
+                 when ".json"
+                   "JSON"
+                 else
+                   "code"
+                 end
+
+      prompt = <<~PROMPT
+        Create a new #{language} file at #{file_path}.
+
+        Requirements:
+        #{content_description}
+
+        Full task: #{full_task}
+
+        Generate the complete file content. Return ONLY the file content, no explanations, no markdown code blocks, just the raw file content.
+      PROMPT
+
+      begin
+        content = context.query(
+          role: :developer,
+          prompt: prompt,
+          stream: false,
+          params: { temperature: 0.2 }
+        ).to_s.strip
+
+        # Remove markdown code blocks if present
+        content = content.gsub(/^```(?:#{language.downcase}|ruby|javascript|typescript|python|java|go|rust|php|markdown|yaml|json|text)?\s*\n/, "")
+                        .gsub(/\n```\s*$/, "")
+                        .strip
+
+        # Ensure content is not empty
+        return generate_fallback_content(file_path, content_description) if content.empty?
+
+        content
+      rescue StandardError => e
+        context.tracer.event("content_generation_failed", message: e.message, path: file_path) if context.respond_to?(:tracer)
+        # Fallback: generate simple content based on description
+        generate_fallback_content(file_path, content_description)
+      end
+    end
+
+    def generate_fallback_content(file_path, description)
+      ext = File.extname(file_path).downcase
+      case ext
+      when ".rb"
+        if description.downcase.include?("print") || description.downcase.include?("hello")
+          "puts 'hello'\n"
+        else
+          "# #{description}\n\n"
+        end
+      when ".js", ".jsx"
+        "console.log('hello');\n"
+      when ".py"
+        "print('hello')\n"
+      when ".md"
+        "# #{description}\n\n"
+      when ".txt"
+        "#{description}\n"
+      else
+        "# #{description}\n"
+      end
     end
 
     def get_directory_structure(path: nil, max_depth: 3)

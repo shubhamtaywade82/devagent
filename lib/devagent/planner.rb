@@ -36,11 +36,11 @@ module Devagent
             "properties" => {
               "step_id" => { "type" => "integer", "minimum" => 1 },
               "action" => { "type" => "string" },
-              "path" => { "type" => ["string", "null"] },
-              "command" => { "type" => ["string", "null"] },
-              "content" => { "type" => ["string", "null"] },
-              "accepted_exit_codes" => { "type" => ["array", "null"], "items" => { "type" => "integer" } },
-              "allow_failure" => { "type" => ["boolean", "null"] },
+              "path" => { "type" => %w[string null] },
+              "command" => { "type" => %w[string null] },
+              "content" => { "type" => %w[string null] },
+              "accepted_exit_codes" => { "type" => %w[array null], "items" => { "type" => "integer" } },
+              "allow_failure" => { "type" => %w[boolean null] },
               "reason" => { "type" => "string" },
               "depends_on" => { "type" => "array", "items" => { "type" => "integer", "minimum" => 0 } }
             }
@@ -215,12 +215,20 @@ module Devagent
       retrieved = ""
       history = ""
       if controller_feedback.to_s.strip.empty?
-        retrieved = context.index.retrieve(task, limit: 6).map do |snippet|
-          "#{snippet["path"]}:\n#{snippet["text"]}\n---"
+        # Reduce context size to avoid prompt truncation (Ollama limit ~4096 tokens)
+        retrieved = context.index.retrieve(task, limit: 4).map do |snippet|
+          # Truncate long snippets to ~500 chars each
+          text = snippet["text"].to_s
+          text = "#{text[0..500]}... (truncated)" if text.length > 500
+          "#{snippet["path"]}:\n#{text}\n---"
         end.join("\n")
 
-        history = context.session_memory.last_turns(6).map do |turn|
-          "#{turn["role"]}: #{turn["content"]}"
+        # Reduce history to 3 turns to save tokens
+        history = context.session_memory.last_turns(3).map do |turn|
+          content = turn["content"].to_s
+          # Truncate long history entries
+          content = "#{content[0..200]}... (truncated)" if content.length > 200
+          "#{turn["role"]}: #{content}"
         end.join("\n")
       end
 
@@ -236,10 +244,27 @@ module Devagent
                       context.tool_registry.tools.values
                     end
 
+      # Use compact contracts to reduce prompt size
       tool_contracts = tool_values.map do |tool|
-        tool.respond_to?(:to_contract_hash) ? tool.to_contract_hash : { "name" => tool.name, "description" => tool.description }
+        if tool.respond_to?(:to_compact_contract_hash)
+          tool.to_compact_contract_hash
+        elsif tool.respond_to?(:to_contract_hash)
+          # Fallback: create compact version manually
+          contract = tool.to_contract_hash
+          {
+            "name" => contract["name"],
+            "category" => contract["category"],
+            "description" => contract["description"],
+            "inputs" => contract["inputs"],
+            "outputs" => contract["outputs"],
+            "dependencies" => contract["dependencies"] || {}
+          }
+        else
+          { "name" => tool.name, "description" => tool.description }
+        end
       end
-      tools_json = JSON.pretty_generate(tool_contracts)
+      # Use compact JSON (no pretty printing) to save tokens
+      tools_json = JSON.generate(tool_contracts)
 
       feedback_section = if feedback && !Array(feedback).empty?
                            "Known issues from reviewer:\n#{Array(feedback).join("\n")}"
@@ -300,9 +325,7 @@ module Devagent
           params: { temperature: 0.1 }
         )
 
-        if push
-          raw.each_char { |char| push.call(char) }
-        end
+        raw.each_char { |char| push.call(char) } if push
 
         raw
       end

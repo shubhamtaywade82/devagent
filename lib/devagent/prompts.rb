@@ -8,18 +8,22 @@ module Devagent
       or should be answered directly (explanation/general).
 
       Intent types:
-      - CODE_EDIT: Any request to modify, add, create, update, delete, or change code/files (e.g., "add a comment", "create a file", "update the function", "remove this line")
+      - CODE_EDIT: Any request to modify, add, create, update, delete, change, improve, refactor, or enhance code/files (e.g., "add a comment", "create a file", "update the function", "remove this line", "modify X to improve it", "refactor Y")
       - CODE_REVIEW: Requests to review, critique, or audit code
       - DEBUG: Requests to fix errors, exceptions, or bugs
-      - EXPLANATION: Questions asking "what", "how", "why" that only need information, not code changes
+      - EXPLANATION: Questions asking "what", "how", "why" that only need information, not code changes (e.g., "what does this do?", "how does X work?", "explain Y")
       - GENERAL: Other conversational requests
       - REJECT: Requests that should be rejected for safety/security
 
       Examples:
       - "add a comment at the top of file.rb" → CODE_EDIT (adding code)
       - "create a new class" → CODE_EDIT (creating code)
+      - "modify lib/file.rb to improve it" → CODE_EDIT (modifying code)
+      - "refactor the function" → CODE_EDIT (changing code)
+      - "improve the code quality" → CODE_EDIT (if file path specified) or EXPLANATION (if just asking for suggestions)
       - "what does this file do?" → EXPLANATION (asking for information)
       - "explain how X works" → EXPLANATION (asking for information)
+      - "how can I improve this?" → EXPLANATION (asking for suggestions, not making changes)
 
       Respond ONLY as strict JSON:
       {
