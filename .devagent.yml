@@ -43,6 +43,8 @@ auto:
     - "src/**"
     - "bin/**"
     - "exe/**"
+    - "README*" # Allow reading documentation files (works for any project type)
+    - "docs/**" # Allow reading documentation directories
   denylist:
     - ".git/**"
     - "node_modules/**"
@@ -56,6 +58,7 @@ index:
   threads: 8
   globs:
     - "**/*.{rb,rbs,ru,erb,haml,slim,js,jsx,ts,tsx}"
+    - "**/*.{md,mdx,txt}" # Include documentation files for better context
   chunk_size: 1800
   overlap: 200
 memory:

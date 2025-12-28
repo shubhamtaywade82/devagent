@@ -35,28 +35,35 @@ git diff
 
 ---
 
-## 0) Baseline sanity checks (no tools, no mutations)
+## 0) Baseline sanity checks (no mutations, minimal tools)
 
 ### Prompt
 `what is this repository about?`
 
 **Expected**
 - Intent classified as **EXPLANATION**
-- ❌ No indexing
-- ❌ No `fs.read` / `exec.run`
-- ✅ Pure text answer
+- ✅ Goes through planning phase (LLM decides what tools are needed)
+- ✅ LLM should intelligently identify and read relevant documentation files (README, docs/, package.json, setup.py, etc.) based on what's available in the repository
+- ✅ `fs.read` of documentation files expected (the planner should understand this is needed)
+- ✅ Works for any project type (Ruby gem, Rails app, Node.js, Python, etc.) - LLM adapts to the project structure
+- ✅ Indexing may also be used for additional context
+- ❌ No `exec.run` (commands not needed)
+- ✅ Pure text answer using documentation content and indexed context
 - ✅ No files modified
 
-**Fail if** any tool is invoked.
+**Note**: The LLM/planner should understand the question intent and intelligently decide which files to read based on the repository context. This should work generically for any project type without hardcoded assumptions about specific file names or project structures.
 
 ### Prompt
 `explain how the ToolRegistry enforces safety`
 
 **Expected**
 - **EXPLANATION** intent
-- ❌ No filesystem access
-- ✅ Answer references concepts (schemas, phase gating, dependencies)
+- ❌ No indexing (conceptual question, not repo-specific)
+- ❌ No filesystem access (`fs.read` / `exec.run`)
+- ✅ Answer references concepts (schemas, phase gating, dependencies) from general knowledge or session history
 - ❌ No diffs, no commands
+
+**Note**: For conceptual questions that don't require repository-specific context, no indexing or file access is needed.
 
 ---
 
@@ -225,10 +232,13 @@ git diff
 `review this repository and point out any obvious issues without changing anything`
 
 **Expected**
-- EXPLANATION/ANALYSIS style response
+- CODE_REVIEW/ANALYSIS intent (goes through full planning loop)
+- ✅ Indexing expected (part of normal CODE_REVIEW flow)
 - ❌ No `fs.write` / `fs.create` / `fs.delete`
-- May use `fs.read` sparingly
+- May use `fs.read` sparingly to examine specific files
 - ✅ No diffs applied
+
+**Note**: CODE_REVIEW intents go through the full planning loop, which includes indexing to gather repository context. This is expected behavior for review/analysis tasks.
 
 ### Prompt
 `run the test suite and fix any failing specs in this repo`

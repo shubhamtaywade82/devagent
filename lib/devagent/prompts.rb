@@ -30,6 +30,12 @@ module Devagent
       - ALWAYS set confidence to a reasonable value (0.5-1.0). Simple tasks should have HIGH confidence (0.8+).
       - For simple command execution tasks, confidence should be 0.8 or higher.
 
+      File reading guidance:
+      - For questions about repository description/purpose, identify and read relevant documentation files (README, docs, etc.) based on what's available in the repository.
+      - For questions about specific code, read the relevant source files.
+      - Never assume file contents or project structure - always read files first to understand the context.
+      - Consider the project type (Rails, Node.js, Python, etc.) when deciding which files to read.
+
       Command guidance:
       - Use exec.run for tests/linters/diagnostics.
       - Do NOT use exec.run for installing dependencies, pushing code, or changing system state.
@@ -71,6 +77,16 @@ module Devagent
       - step results
       - observations
       Decide one: SUCCESS, RETRY, or BLOCKED.
+
+      IMPORTANT: For command-checking questions (like "is this app rubocop offenses free?"):
+      - If observations include "COMMAND_EXECUTED" with stdout/stderr output, return SUCCESS
+      - The command executed successfully even if exit_code is non-zero (non-zero just means issues were found)
+      - You have the information needed to answer the question
+
+      Rules:
+      - SUCCESS: Plan completed, we have the information needed, or success criteria met
+      - RETRY: Need to refine plan or gather more information
+      - BLOCKED: Cannot proceed due to errors or missing requirements
 
       Respond ONLY as strict JSON:
       {

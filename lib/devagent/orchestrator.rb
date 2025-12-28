@@ -37,8 +37,12 @@ module Devagent
         if question_requires_command?(task)
           # Allow EXPLANATION questions that need commands to go through planning
           # This enables run_command to be used for checking tools like rubocop, tests, etc.
+        elsif question_needs_file_access?(task)
+          # Allow EXPLANATION questions that might need file access (e.g., "what is this repository about?")
+          # to go through planning so the LLM can intelligently decide which files to read based on the question
+          # and repository context (works for any project type: Rails, Node.js, Python, etc.)
         else
-          # Use repo context if the question is about the repository
+          # Simple conceptual questions that don't need tools - answer directly with indexing if repo-related
           use_repo_context = question_about_repo?(task)
           with_spinner("Indexing") { context.index.build! } if use_repo_context
           return answer_unactionable(task, state.intent_confidence, use_repo_context: use_repo_context)
@@ -88,6 +92,19 @@ module Devagent
             end
           end
 
+          # Check if we should fallback for EXPLANATION questions that need file access
+          # If planning fails, fall back to indexing + direct answer (simpler approach)
+          if question_needs_file_access?(task) && %w[EXPLANATION GENERAL].include?(state.intent)
+            if plan.confidence.to_f < 0.3 || plan.steps.empty?
+              unless quiet?
+                streamer.say("Planning generated low confidence for explanation question. Falling back to indexing...",
+                             level: :warn)
+              end
+              use_repo_context = question_about_repo?(task)
+              return answer_unactionable(task, state.intent_confidence, use_repo_context: use_repo_context)
+            end
+          end
+
           begin
             validate_plan!(state, plan, visible_tools: visible_tools)
           rescue StandardError => e
@@ -100,6 +117,12 @@ module Devagent
                 state.phase = :execution
                 next
               end
+            end
+            # If validation fails for an EXPLANATION question that needs file access, fall back to indexing
+            if question_needs_file_access?(task) && %w[EXPLANATION GENERAL].include?(state.intent)
+              streamer.say("Plan validation failed. Falling back to indexing for explanation...", level: :warn) unless quiet?
+              use_repo_context = question_about_repo?(task)
+              return answer_unactionable(task, state.intent_confidence, use_repo_context: use_repo_context)
             end
             state.record_error(signature: "plan_rejected", message: e.message)
             state.record_observation({ "type" => "PLAN_REJECTED", "message" => e.message })
@@ -139,6 +162,10 @@ module Devagent
           end
 
           decision_next_phase(state, task, max_cycles: max_cycles)
+        when :done
+          # Generate answer based on observations and command output
+          generate_answer(task, state)
+          break
         else
           state.phase = :halted
         end
@@ -194,6 +221,7 @@ module Devagent
         raise Error, "file already exists: #{path}" if File.exist?(File.join(context.repo_path, path.to_s))
 
         raise Error, "content required" if content.to_s.empty?
+
         # Deterministic add-file diff generation (do not rely on model formatting).
         diff = build_add_file_diff(path: path.to_s, content: content.to_s)
 
@@ -224,6 +252,7 @@ module Devagent
         cmd = "bundle exec rspec" if action == "run_tests" && cmd.strip.empty?
         tokens = Shellwords.split(cmd)
         raise Error, "command required" if tokens.empty?
+
         tool_invoke_with_policy(
           state,
           "exec.run",
@@ -272,10 +301,14 @@ module Devagent
       when "fs.write_diff"
         state.record_file_written(args["path"])
       when "exec.run"
-        state.record_command(args["command"])
+        # Reconstruct command string from program + args for logging
+        program = args["program"].to_s
+        cmd_args = Array(args["args"]).map(&:to_s)
+        command_str = [program, *cmd_args].join(" ")
+        state.record_command(command_str)
         state.record_observation({
                                    "type" => "COMMAND_EXECUTED",
-                                   "command" => args["command"],
+                                   "command" => command_str,
                                    "stdout" => truncate_output(result["stdout"].to_s, lines: 20),
                                    "stderr" => truncate_output(result["stderr"].to_s, lines: 20),
                                    "exit_code" => result["exit_code"].to_i
@@ -373,11 +406,40 @@ module Devagent
       streamer.say("Answering failed: #{e.message}") unless quiet?
     end
 
+    # Generate answer when we have command output from observations
+    def generate_answer(task, state)
+      streamer.say("Answer:") unless quiet?
+
+      # Build prompt with command output from observations
+      prompt = build_answer_prompt_with_observations(task, state)
+
+      answer = with_spinner("Answering") do
+        context.query(
+          role: :developer,
+          prompt: prompt,
+          stream: false
+        )
+      end
+      streamer.say(answer.to_s.strip, markdown: true)
+    rescue Exception => e
+      raise if e.is_a?(Interrupt)
+
+      streamer.say("Answering failed: #{e.message}") unless quiet?
+    end
+
     def quiet?
       context.config.dig("ui", "quiet") == true
     end
 
     def build_answer_prompt(task, use_repo_context:)
+      # For repository description questions, try to read README files directly
+      # This ensures we get documentation even if semantic search doesn't find it
+      readme_content = if question_needs_file_access?(task) && question_about_repo?(task)
+                         read_readme_files_directly
+                       else
+                         ""
+                       end
+
       retrieved = if use_repo_context
                     safe_index_retrieve(task, limit: 6).map do |snippet|
                       "#{snippet["path"]}:\n#{snippet["text"]}\n---"
@@ -404,8 +466,39 @@ module Devagent
         Recent conversation:
         #{history}
 
-        #{"Directory structure:\n#{dir_structure}\n\n" unless dir_structure.empty?}Repository context:
+        #{"Directory structure:\n#{dir_structure}\n\n" unless dir_structure.empty?}#{"Documentation:\n#{readme_content}\n\n" unless readme_content.empty?}Repository context:
         #{retrieved.empty? ? "(none)" : retrieved}
+
+        Question:
+        #{task}
+      PROMPT
+    end
+
+    def build_answer_prompt_with_observations(task, state)
+      # Extract command output from observations
+      command_observations = state.observations.select { |o| o["type"] == "COMMAND_EXECUTED" }
+      command_output = ""
+      command_observations.each do |obs|
+        command_output += "Command: #{obs["command"]}\n"
+        command_output += "Exit code: #{obs["exit_code"]}\n"
+        command_output += "STDOUT:\n#{obs["stdout"]}\n" if obs["stdout"] && !obs["stdout"].empty?
+        command_output += "STDERR:\n#{obs["stderr"]}\n" if obs["stderr"] && !obs["stderr"].empty?
+        command_output += "\n---\n"
+      end
+
+      history = safe_session_history(limit: 6).map do |turn|
+        "#{turn["role"]}: #{turn["content"]}"
+      end.join("\n")
+
+      <<~PROMPT
+        You are a concise, helpful developer assistant.
+        Answer the user's question based on the command output provided below.
+
+        Recent conversation:
+        #{history}
+
+        Command execution results:
+        #{command_output.empty? ? "(no command output)" : command_output}
 
         Question:
         #{task}
@@ -460,6 +553,18 @@ module Devagent
     end
 
     def decision_next_phase(state, task, max_cycles:)
+      # Special handling for command-checking questions: if we have command output, proceed to answer
+      if question_requires_command?(task)
+        command_observations = state.observations.select { |o| o["type"] == "COMMAND_EXECUTED" }
+        if command_observations.any?
+          # We have command output, generate answer directly
+          state.confidence = 0.8
+          generate_answer(task, state)
+          state.phase = :halted # Set to halted to exit the loop
+          return
+        end
+      end
+
       decision = DecisionEngine.new(context).decide(
         plan: plan_payload(state.plan),
         step_results: state.step_results,
@@ -524,7 +629,13 @@ module Devagent
       # For command-only plans (checking tools like rubocop), allow lower confidence
       # since these are straightforward tasks
       has_commands = plan.steps.any? { |s| %w[exec.run run_command run_tests].include?(s["action"].to_s) }
-      min_confidence = has_commands ? 0.3 : 0.5
+      # For read-only plans (EXPLANATION questions that just need to read files), also allow lower confidence
+      has_only_reads = plan.steps.all? { |s| %w[fs.read fs_read].include?(s["action"].to_s) } && !plan.steps.empty?
+      min_confidence = if has_commands || has_only_reads
+                        0.3
+                      else
+                        0.5
+                      end
       raise Error, "plan confidence too low" if plan.confidence.to_f < min_confidence
 
       allowed = Array(visible_tools).map(&:name)
@@ -621,6 +732,20 @@ module Devagent
       repo_keywords = %w[repo repository project codebase codebase this repo this repository this project
                          directory structure file structure folder structure project structure]
       repo_keywords.any? { |keyword| text.include?(keyword) }
+    end
+
+    def question_needs_file_access?(task)
+      text = task.to_s.strip.downcase
+      # Questions that might need reading files (documentation, source files, config files, etc.)
+      # The LLM will decide which specific files to read based on the question and repository context
+      file_access_indicators = [
+        "what is this", "what is the", "what's this", "what's the",
+        "about", "description", "purpose", "what does", "what do",
+        "explain this repo", "explain this repository", "explain this project",
+        "read", "show me", "what files", "what's in", "list files"
+      ]
+      file_access_indicators.any? { |keyword| text.include?(keyword) } &&
+        question_about_repo?(task)
     end
 
     def question_about_directory_structure?(task)
@@ -729,6 +854,32 @@ module Devagent
       # Return last N lines with a note
       truncated = output_lines.last(lines).join("\n")
       "#{truncated}\n... (showing last #{lines} of #{output_lines.size} lines)"
+    end
+
+    def read_readme_files_directly
+      # Try to read common documentation files in order of priority
+      # This is a fallback when planning fails or semantic search doesn't find README
+      readme_paths = %w[README.md README.txt README README.rst README.markdown]
+      readme_content = []
+
+      readme_paths.each do |path|
+        full_path = File.join(context.repo_path, path)
+        next unless File.exist?(full_path)
+
+        begin
+          # Read directly (safe for documentation files in repo root)
+          # We bypass tool_bus here because this is a fallback mechanism and README files
+          # are generally safe to read
+          content = File.read(full_path, encoding: "UTF-8")
+          readme_content << "#{path}:\n#{content}\n---" unless content.empty?
+          break # Use the first found README file
+        rescue StandardError => e
+          context.tracer.event("readme_read_failed", path: path, message: e.message) if context.respond_to?(:tracer)
+          next
+        end
+      end
+
+      readme_content.join("\n")
     end
 
     # Build a minimal unified diff for creating a new file from scratch.
