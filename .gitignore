@@ -12,3 +12,7 @@
 .devagent/**
 .env.*
 .env
+
+# Built gem files
+*.gem
+/pkg/
