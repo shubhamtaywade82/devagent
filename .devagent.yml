@@ -28,11 +28,13 @@ auto:
     - "app/**"
     - "lib/**"
     - "spec/**"
+    - "sig/**"
     - "config/**"
     - "db/**"
     - "src/**"
     - "bin/**"
     - "exe/**"
+    - "**.md"
   denylist:
     - ".git/**"
     - "node_modules/**"

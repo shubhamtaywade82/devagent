@@ -68,7 +68,7 @@ module Devagent
           "require_tests_green" => true,
           "dry_run" => false,
           "command_allowlist" => ["bundle exec", "ruby", "npm", "yarn"],
-          "allowlist" => ["app/**", "lib/**", "spec/**", "config/**", "db/**", "src/**"],
+          "allowlist" => ["app/**", "lib/**", "spec/**", "sig/**", "config/**", "db/**", "src/**"],
           "denylist" => [".git/**", "node_modules/**", "log/**", "tmp/**", "dist/**", "build/**", ".env*",
                          "config/credentials*"]
         },
