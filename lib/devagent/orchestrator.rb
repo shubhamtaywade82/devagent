@@ -32,7 +32,12 @@ module Devagent
       context.tracer.event("intent", intent: state.intent, confidence: state.intent_confidence)
 
       if %w[EXPLANATION GENERAL].include?(state.intent)
-        return answer_unactionable(task, state.intent_confidence, use_repo_context: false)
+        # Use repo context if the question is about the repository
+        use_repo_context = question_about_repo?(task)
+        if use_repo_context
+          with_spinner("Indexing") { context.index.build! }
+        end
+        return answer_unactionable(task, state.intent_confidence, use_repo_context: use_repo_context)
       end
       return answer_unactionable(task, state.intent_confidence, use_repo_context: false) if state.intent == "REJECT"
 
@@ -293,6 +298,13 @@ module Devagent
                     ""
                   end
 
+      # Include directory structure if the question is about directory structure
+      dir_structure = if question_about_directory_structure?(task)
+                        get_directory_structure
+                      else
+                        ""
+                      end
+
       history = safe_session_history(limit: 6).map do |turn|
         "#{turn["role"]}: #{turn["content"]}"
       end.join("\n")
@@ -304,8 +316,8 @@ module Devagent
         Recent conversation:
         #{history}
 
-        Repository context:
-        #{retrieved}
+        #{dir_structure.empty? ? "" : "Directory structure:\n#{dir_structure}\n\n"}Repository context:
+        #{retrieved.empty? ? "(none)" : retrieved}
 
         Question:
         #{task}
@@ -480,6 +492,53 @@ module Devagent
       else
         yield
       end
+    end
+
+    def question_about_repo?(task)
+      text = task.to_s.strip.downcase
+      repo_keywords = %w[repo repository project codebase codebase this repo this repository this project
+                         directory structure file structure folder structure project structure]
+      repo_keywords.any? { |keyword| text.include?(keyword) }
+    end
+
+    def question_about_directory_structure?(task)
+      text = task.to_s.strip.downcase
+      structure_keywords = %w[directory structure file structure folder structure project structure
+                              directory tree file tree folder tree directory layout file layout]
+      structure_keywords.any? { |keyword| text.include?(keyword) }
+    end
+
+    def get_directory_structure(max_depth: 3)
+      return "" unless context.repo_path && Dir.exist?(context.repo_path)
+
+      build_tree(context.repo_path, "", max_depth: max_depth)
+    end
+
+    def build_tree(dir_path, prefix, max_depth:, current_depth: 0)
+      return "" if current_depth >= max_depth
+
+      entries = Dir.entries(dir_path)
+                  .reject { |e| e.start_with?(".") }
+                  .reject { |e| e == "node_modules" || e == ".git" || e == ".devagent" }
+                  .sort
+
+      return "" if entries.empty?
+
+      result = []
+      entries.each_with_index do |entry, index|
+        full_path = File.join(dir_path, entry)
+        is_last = index == entries.size - 1
+        current_prefix = is_last ? "└── " : "├── "
+        result << "#{prefix}#{current_prefix}#{entry}"
+
+        if File.directory?(full_path)
+          next_prefix = prefix + (is_last ? "    " : "│   ")
+          subtree = build_tree(full_path, next_prefix, max_depth: max_depth, current_depth: current_depth + 1)
+          result << subtree unless subtree.empty?
+        end
+      end
+
+      result.join("\n")
     end
   end
 end
