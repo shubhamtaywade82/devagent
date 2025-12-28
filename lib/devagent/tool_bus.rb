@@ -36,6 +36,16 @@ module Devagent
       @changes_made
     end
 
+    def read_file(args)
+      relative_path = args.fetch("path")
+      guard_path!(relative_path)
+      full = File.join(context.repo_path, relative_path)
+      context.tracer.event("read_file", path: relative_path)
+      return "" unless File.exist?(full)
+
+      File.read(full, encoding: "UTF-8")
+    end
+
     def write_file(args)
       relative_path = args.fetch("path")
       content = args.fetch("content")
@@ -71,6 +81,7 @@ module Devagent
       command = args["command"] || default_test_command
       context.tracer.event("run_tests", command: command)
       return :skipped if dry_run?
+      raise Error, "command not allowed" unless command_allowed?(command)
 
       Util.run!(command, chdir: context.repo_path)
       :ok
@@ -80,6 +91,7 @@ module Devagent
       command = args.fetch("command")
       context.tracer.event("run_command", command: command)
       return "skipped" if dry_run?
+      raise Error, "command not allowed" unless command_allowed?(command)
 
       Util.run!(command, chdir: context.repo_path)
     end
@@ -103,6 +115,27 @@ module Devagent
       context.plugins.filter_map do |plugin|
         plugin.respond_to?(:test_command) ? plugin.test_command(context) : nil
       end.first || "bundle exec rspec"
+    end
+
+    def command_allowed?(command)
+      cmd = command.to_s.strip
+      return false if cmd.empty?
+
+      deny_patterns = [
+        /\Agit\s+push\b/i,
+        /\Agit\s+commit\b/i,
+        /\Agit\s+reset\b/i,
+        /\Agit\s+clean\b/i,
+        /\Arm\s+/i,
+        /\Asudo\b/i
+      ]
+      return false if deny_patterns.any? { |re| cmd.match?(re) }
+
+      allow = Array(context.config.dig("auto", "command_allowlist"))
+      # Back-compat: nil/empty allowlist means allow any command.
+      return true if allow.empty?
+
+      allow.any? { |prefix| cmd.start_with?(prefix.to_s) }
     end
   end
 end

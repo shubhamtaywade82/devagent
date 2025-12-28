@@ -12,6 +12,7 @@ RSpec.describe Devagent::Orchestrator do
       session_memory: session_memory,
       index: index,
       tracer: tracer,
+      tool_registry: tool_registry,
       tool_bus: tool_bus,
       config: { "auto" => { "max_iterations" => 2, "require_tests_green" => true } },
       plugins: []
@@ -21,6 +22,14 @@ RSpec.describe Devagent::Orchestrator do
   let(:index) { instance_double(Devagent::EmbeddingIndex, build!: nil) }
   let(:tracer) { instance_double(Devagent::Tracer, event: nil) }
   let(:tool_bus) { instance_double(Devagent::ToolBus, reset!: nil, invoke: nil, changes_made?: changes_made, run_tests: :ok) }
+  let(:tool_registry) do
+    instance_double(
+      Devagent::ToolRegistry,
+      tools_for_phase: { "fs_read" => double(name: "fs_read", description: "read"),
+                         "fs_write" => double(name: "fs_write", description: "write") },
+      fetch: double(allowed_phases: %i[execution])
+    )
+  end
   let(:changes_made) { true }
 
   before do
@@ -31,7 +40,14 @@ RSpec.describe Devagent::Orchestrator do
 
   describe "#run" do
     let(:plan) do
-      Devagent::Plan.new(summary: "Do work", actions: [{ "type" => "fs_write", "args" => { "path" => "file", "content" => "text" } }], confidence: 0.8)
+      Devagent::Plan.new(
+        summary: "Do work",
+        actions: [
+          { "type" => "fs_read", "args" => { "path" => "file" } },
+          { "type" => "fs_write", "args" => { "path" => "file", "content" => "text" } }
+        ],
+        confidence: 0.8
+      )
     end
 
     before do
@@ -47,6 +63,7 @@ RSpec.describe Devagent::Orchestrator do
       expect(index).to have_received(:build!)
       expect(tool_bus).to have_received(:reset!).once
       expect(tool_bus).to have_received(:invoke).with(plan.actions.first)
+      expect(tool_bus).to have_received(:invoke).with(plan.actions.last)
       expect(tool_bus).to have_received(:run_tests)
       expect(planner).to have_received(:plan).once
     end

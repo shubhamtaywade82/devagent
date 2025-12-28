@@ -43,13 +43,13 @@ module Devagent
       @streamer = streamer
     end
 
-    def plan(task)
+    def plan(task, controller_feedback: nil, visible_tools: nil)
       attempts = 0
       feedback = nil
       raw_plan = nil
 
       loop do
-        raw_plan = generate_plan(task, feedback)
+        raw_plan = generate_plan(task, feedback, controller_feedback: controller_feedback, visible_tools: visible_tools)
         payload = parse_plan(raw_plan)
         review = review_plan(task, raw_plan)
         if review["approved"] || attempts >= 1
@@ -70,8 +70,8 @@ module Devagent
 
     attr_reader :context, :streamer
 
-    def generate_plan(task, feedback)
-      prompt = build_prompt(task, feedback)
+    def generate_plan(task, feedback, controller_feedback:, visible_tools:)
+      prompt = build_prompt(task, feedback, controller_feedback: controller_feedback, visible_tools: visible_tools)
       response_format = json_schema_format(PLAN_SCHEMA) if context.provider_for(:planner) == "openai"
       return stream_plan(prompt, response_format) if streamer
 
@@ -118,7 +118,7 @@ module Devagent
       { "approved" => true, "issues" => [] }
     end
 
-    def build_prompt(task, feedback)
+    def build_prompt(task, feedback, controller_feedback:, visible_tools:)
       retrieved = context.index.retrieve(task, limit: 6).map do |snippet|
         "#{snippet["path"]}:\n#{snippet["text"]}\n---"
       end.join("\n")
@@ -131,7 +131,15 @@ module Devagent
         plugin.on_prompt(context, task) if plugin.respond_to?(:on_prompt)
       end.join("\n")
 
-      tools = context.tool_registry.tools.values.map do |tool|
+      tool_values = if visible_tools
+                      Array(visible_tools)
+                    elsif context.tool_registry.respond_to?(:tools_for_phase)
+                      context.tool_registry.tools_for_phase(:planning).values
+                    else
+                      context.tool_registry.tools.values
+                    end
+
+      tools = tool_values.map do |tool|
         "- #{tool.name}: #{tool.description}"
       end.join("\n")
 
@@ -140,6 +148,12 @@ module Devagent
                          else
                            ""
                          end
+
+      controller_section = if controller_feedback && !controller_feedback.to_s.strip.empty?
+                             "Controller observations (normalized):\n#{controller_feedback}"
+                           else
+                             ""
+                           end
 
       <<~PROMPT
         #{Prompts::PLANNER_SYSTEM}
@@ -156,6 +170,7 @@ module Devagent
         #{retrieved}
 
         #{feedback_section}
+        #{controller_section}
 
         Task:
         #{task}

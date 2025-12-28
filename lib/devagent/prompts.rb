@@ -2,6 +2,18 @@
 
 module Devagent
   module Prompts
+    INTENT_SYSTEM = <<~PROMPT.freeze
+      You are an intent classifier for a local dev agent CLI.
+      Classify whether the user's message requires repository tools (edit/debug/review)
+      or should be answered directly (explanation/general).
+
+      Respond ONLY as strict JSON:
+      {
+        "intent": "CODE_EDIT" | "CODE_REVIEW" | "EXPLANATION" | "DEBUG" | "GENERAL" | "REJECT",
+        "confidence": number (0-1)
+      }
+    PROMPT
+
     PLANNER_SYSTEM = <<~PROMPT.freeze
       You are the project manager of an elite autonomous software team.
       Produce a plan as strict JSON matching this schema:
