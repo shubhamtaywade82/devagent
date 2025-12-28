@@ -21,17 +21,13 @@ module Devagent
   # Planner coordinates with the planning and review models to produce
   # validated actions.
   class Planner
-    PLAN_SCHEMA = {
+    PLAN_SCHEMA_V2 = {
       "type" => "object",
-      "required" => %w[confidence],
-      "anyOf" => [{ "required" => ["steps"] }, { "required" => ["actions"] }],
+      "required" => %w[plan_id goal assumptions steps success_criteria rollback_strategy confidence],
       "properties" => {
-        "confidence" => { "type" => "number", "minimum" => 0, "maximum" => 1 },
         "plan_id" => { "type" => "string" },
         "goal" => { "type" => "string" },
         "assumptions" => { "type" => "array", "items" => { "type" => "string" } },
-        "rollback_strategy" => { "type" => "string" },
-        "success_criteria" => { "type" => "array", "items" => { "type" => "string" } },
         "steps" => {
           "type" => "array",
           "items" => {
@@ -47,6 +43,18 @@ module Devagent
             }
           }
         },
+        "success_criteria" => { "type" => "array", "items" => { "type" => "string" } },
+        "rollback_strategy" => { "type" => "string" },
+        "confidence" => { "type" => "number", "minimum" => 0, "maximum" => 1 }
+      }
+    }.freeze
+
+    PLAN_SCHEMA_V1 = {
+      "type" => "object",
+      "required" => %w[confidence actions],
+      "properties" => {
+        "confidence" => { "type" => "number", "minimum" => 0, "maximum" => 1 },
+        "summary" => { "type" => "string" },
         "actions" => {
           "type" => "array",
           "items" => {
@@ -59,6 +67,10 @@ module Devagent
           }
         }
       }
+    }.freeze
+
+    PLAN_SCHEMA = {
+      "anyOf" => [PLAN_SCHEMA_V2, PLAN_SCHEMA_V1]
     }.freeze
 
     REVIEW_SCHEMA = {
@@ -111,13 +123,13 @@ module Devagent
 
           break Plan.new(
             plan_id: payload["plan_id"],
-            goal: payload["goal"],
+            goal: payload["goal"] || payload["summary"],
             assumptions: Array(payload["assumptions"]),
             steps: steps,
             success_criteria: Array(payload["success_criteria"]),
             rollback_strategy: payload["rollback_strategy"].to_s,
             confidence: payload["confidence"].to_f,
-            summary: payload["goal"].to_s,
+            summary: (payload["goal"] || payload["summary"]).to_s,
             actions: [] # no longer used for execution
           )
         end
@@ -192,13 +204,19 @@ module Devagent
     end
 
     def build_prompt(task, feedback, controller_feedback:, visible_tools:)
-      retrieved = context.index.retrieve(task, limit: 6).map do |snippet|
-        "#{snippet["path"]}:\n#{snippet["text"]}\n---"
-      end.join("\n")
+      # Context assembly discipline: after we have controller feedback (i.e., post-iteration),
+      # do not keep expanding context with long history or broad retrieval. Feed only reduced observations.
+      retrieved = ""
+      history = ""
+      if controller_feedback.to_s.strip.empty?
+        retrieved = context.index.retrieve(task, limit: 6).map do |snippet|
+          "#{snippet["path"]}:\n#{snippet["text"]}\n---"
+        end.join("\n")
 
-      history = context.session_memory.last_turns(8).map do |turn|
-        "#{turn["role"]}: #{turn["content"]}"
-      end.join("\n")
+        history = context.session_memory.last_turns(6).map do |turn|
+          "#{turn["role"]}: #{turn["content"]}"
+        end.join("\n")
+      end
 
       plugin_guidance = context.plugins.filter_map do |plugin|
         plugin.on_prompt(context, task) if plugin.respond_to?(:on_prompt)

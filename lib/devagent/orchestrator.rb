@@ -8,6 +8,7 @@ require_relative "agent_state"
 require_relative "intent_classifier"
 require_relative "diff_generator"
 require_relative "decision_engine"
+require_relative "success_verifier"
 
 module Devagent
   # Orchestrator coordinates planning, execution, and testing loops.
@@ -58,7 +59,7 @@ module Devagent
           streamer.say("Plan: #{plan.goal} (#{(plan.confidence * 100).round}%)") if plan.goal && !quiet?
 
           begin
-            validate_plan!(plan, visible_tools: visible_tools)
+            validate_plan!(state, plan, visible_tools: visible_tools)
           rescue StandardError => e
             state.record_error(signature: "plan_rejected", message: e.message)
             state.record_observation({ "type" => "PLAN_REJECTED", "message" => e.message })
@@ -108,8 +109,10 @@ module Devagent
 
     def execute_plan(state)
       plan = state.plan
+      total = plan.steps.size
       plan.steps.each do |step|
         state.current_step = step["step_id"].to_i
+        streamer.say("[#{state.current_step}/#{total}] #{step["action"]} #{step["path"] || step["command"]}".strip) unless quiet?
         ensure_dependencies!(step, state.step_results)
         result = execute_step(state, plan, step)
         state.step_results[step["step_id"]] = result
@@ -359,13 +362,32 @@ module Devagent
 
       case decision["decision"]
       when "SUCCESS"
+        begin
+          SuccessVerifier.verify!(
+            criteria: state.plan.success_criteria,
+            observations: state.observations,
+            artifacts: state.artifacts
+          )
+        rescue StandardError => e
+          streamer.say("Success criteria not met: #{e.message}", level: :warn) unless quiet?
+          state.phase = state.cycle < max_cycles ? :planning : :halted
+          return
+        end
+
         state.confidence = decision["confidence"].to_f
         state.phase = :done
       when "RETRY"
         streamer.say("Retrying: #{decision["reason"]}", level: :warn) unless quiet?
         state.phase = state.cycle < max_cycles ? :planning : :halted
       else
-        streamer.say("Blocked: #{decision["reason"]}", level: :warn) unless quiet?
+        reason = decision["reason"].to_s
+        if !state.clarification_asked && reason.match?(/missing|unclear|unknown/i)
+          state.clarification_asked = true
+          streamer.say("Clarification needed: #{reason}", level: :warn) unless quiet?
+          streamer.say("Please answer the question above and rerun.", level: :warn) unless quiet?
+        else
+          streamer.say("Blocked: #{reason}", level: :warn) unless quiet?
+        end
         state.phase = :halted
       end
     end
@@ -376,13 +398,23 @@ module Devagent
       false
     end
 
-    def validate_plan!(plan, visible_tools:)
+    def validate_plan!(state, plan, visible_tools:)
       raise Error, "plan confidence too low" if plan.confidence.to_f < 0.5
 
       allowed = Array(visible_tools).map(&:name)
       step_actions = plan.steps.map { |s| s["action"].to_s }
       unknown = step_actions.reject { |a| allowed.include?(a) || a == "fs_write" } # fs_write is logical action
       raise Error, "plan uses unknown tools: #{unknown.uniq.join(", ")}" unless unknown.empty?
+
+      # Read scope limiter: first cycle may read at most one file.
+      if state.cycle.to_i == 0
+        reads = plan.steps.count { |s| s["action"].to_s == "fs_read" }
+        raise Error, "too many reads in first plan" if reads > 1
+      end
+
+      fp = fingerprint_plan(plan)
+      raise Error, "plan repeated without progress" if state.plan_fingerprints.include?(fp)
+      state.plan_fingerprints << fp
 
       # Enforce: every fs_write depends on a prior fs_read of the same path.
       reads = {}
@@ -397,6 +429,15 @@ module Devagent
         dep_paths = deps.filter_map { |id| reads[id] }
         raise Error, "fs_write must depend_on prior fs_read of same path (#{path})" unless dep_paths.include?(path)
       end
+    end
+
+    def fingerprint_plan(plan)
+      require "digest"
+      require "json"
+      normalized = plan.steps.map do |s|
+        [s["action"], s["path"], s["command"], Array(s["depends_on"]).map(&:to_i)]
+      end
+      Digest::SHA256.hexdigest(JSON.generate(normalized))
     end
 
     def plan_payload(plan)
