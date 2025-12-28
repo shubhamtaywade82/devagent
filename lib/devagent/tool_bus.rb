@@ -88,6 +88,18 @@ module Devagent
       guard_path!(relative_path)
       validate_diff!(relative_path, diff)
 
+      # Check if diff is a no-op (only context lines, no additions or deletions)
+      # git apply rejects no-op diffs as "corrupt", so we skip them
+      diff_lines = diff.lines
+      has_changes = diff_lines.any? { |line| line.start_with?("+", "-") && !line.start_with?("+++", "---") }
+
+      unless has_changes
+        # No-op diff: file already has the requested changes
+        # Return success since the goal is already achieved
+        context.tracer.event("fs_write_diff", path: relative_path, note: "no-op diff, already applied")
+        return { "applied" => true }
+      end
+
       context.tracer.event("fs_write_diff", path: relative_path)
       return { "applied" => false } if dry_run?
 
