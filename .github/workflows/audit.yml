@@ -19,7 +19,7 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
-          bundler-cache: true
+          bundler-cache: false
 
       - name: Install Node (for front-end projects)
         uses: actions/setup-node@v4
@@ -28,8 +28,7 @@ jobs:
 
       - name: Bundle install
         run: |
-          bundle config set path 'vendor/bundle'
-          bundle install --jobs 4 --retry 3
+          bundle install --jobs 4 --retry 3 --system
 
       - name: Run repository audit
         run: ruby script/audit_devagent.rb
