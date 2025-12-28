@@ -1,6 +1,6 @@
 # DevAgent Usage Guide
 
-A complete guide to using DevAgent for autonomous coding tasks.
+A complete guide to using DevAgent for controller-driven, bounded coding tasks.
 
 ---
 
@@ -65,7 +65,23 @@ devagent> fix the bug in the payment processor
 
 ## Configuration
 
-### Your `.devagent.yml` File
+### Configuration files (global vs project)
+
+Devagent uses two different configuration files with different scopes:
+
+- **Global user config** (`~/.devagent.yml`)
+  - Provider defaults
+  - **Ollama host** (`ollama.host`) and timeouts (`ollama.timeout`)
+  - Preferences that should apply regardless of which directory you run `devagent` from
+
+- **Project config** (`.devagent.yml` in the repo root)
+  - File allowlist/denylist (sandbox)
+  - Project-specific model choices
+  - Test commands / indexing rules
+
+Project config never overrides Ollama host; host resolution is always global (CLI/ENV/`~/.devagent.yml`/default).
+
+### Your project `.devagent.yml` file
 
 Located in your project root, this file controls:
 - Provider (Ollama/OpenAI)
@@ -152,11 +168,13 @@ Executes the plan step by step:
 ### 4. Observation & Decision
 After execution:
 - Observes results
-- Runs tests
+- Runs tests (when applicable)
 - Makes decisions:
   - **SUCCESS** - Task complete
   - **RETRY** - Try again with changes
   - **HALT** - Stop (blocked or repeated failures)
+
+Iteration is strictly bounded by a controller-enforced maximum and halts on repeated failures or low confidence.
 
 ---
 
@@ -190,6 +208,8 @@ DevAgent can use these tools:
 - **fs.delete** - Delete files
 - **exec.run** - Execute allowlisted shell commands
 - **diagnostics.error_summary** - Summarize stderr into likely root cause
+
+All file modifications are applied via controller-generated diffs. The language model never writes files directly.
 
 ---
 
@@ -239,11 +259,11 @@ auto:
 ```
 
 ### 4. Check Results
-DevAgent will:
-- Show what it's doing
-- Run tests automatically
-- Report success/failure
-- Ask for clarification if needed
+DevAgent will, when applicable:
+- Show planned and executed steps
+- Run allowlisted test commands
+- Verify success via observed results
+- Ask for clarification if blocked
 
 ---
 
@@ -267,6 +287,11 @@ DevAgent will:
 ### "Halting: repeated decision"
 - Agent is stuck in a loop
 - **Solution**: Provide more context or break down the task
+
+### "Wrong model behavior" / "poor results"
+- Check: `devagent diag` (provider + selected models)
+- Model size matters (e.g., 3B vs 8B vs 70B): smaller models often struggle with multi-step edits and strict schemas
+- Context/window settings (e.g., `openai.options.num_ctx`) can limit planning quality
 
 ---
 

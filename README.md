@@ -1,6 +1,8 @@
 # Devagent
 
-Devagent is a local-first, autonomous coding agent for Ruby projects. It plans tasks, edits files, writes tests, and iterates on its own while respecting sandboxed file access. The agent can run fully offline through Ollama or switch to OpenAI models when an `OPENAI_API_KEY` is available.
+Devagent is a local-first, **controller-driven** coding agent for Ruby projects. It plans tasks and executes a bounded, tool-driven loop while respecting sandboxed file access. The agent can run fully offline through Ollama or switch to OpenAI models when an `OPENAI_API_KEY` is available.
+
+Iteration is strictly bounded by a controller-enforced maximum and halts on repeated failures or low confidence.
 
 ## Features
 
@@ -19,7 +21,7 @@ bundle install
 # Install gem locally
 bundle exec rake install
 
-# Start the autonomous REPL
+# Start the REPL
 devagent
 
 # Force a specific provider
@@ -62,6 +64,22 @@ devagent diag
 ```
 
 Note: Devagent does **not** auto-load `.env` / dotenv files from the current directory. Use `OLLAMA_HOST` or `~/.devagent.yml` instead.
+
+### Configuration files (global vs project)
+
+Devagent uses two different configuration files with different scopes:
+
+- **Global user config** (`~/.devagent.yml`)
+  - Provider defaults
+  - **Ollama host** (`ollama.host`) and timeouts (`ollama.timeout`)
+  - Personal preferences that should apply regardless of which directory you run `devagent` from
+
+- **Project config** (`.devagent.yml` in the repo root)
+  - File allowlist/denylist (sandbox)
+  - Project-specific model choices
+  - Test commands / indexing rules
+
+Project config never overrides Ollama host; host resolution is always global (CLI/ENV/`~/.devagent.yml`/default).
 
 ### Configuration (`.devagent.yml`)
 
@@ -129,6 +147,10 @@ memory:
 | `devagent config`                                | Print resolved configuration (including Ollama host + source).        |
 | `devagent diag`                                  | Print provider, model, embedding backend, and key status diagnostics. |
 | `devagent test`                                  | Run connectivity diagnostics.                                         |
+
+## Safety guarantee (important)
+
+All file modifications are applied via controller-generated diffs. The language model never writes files directly.
 
 ## Tooling & Scripts
 
