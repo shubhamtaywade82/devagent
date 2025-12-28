@@ -70,10 +70,21 @@ module Devagent
     def context_overrides
       overrides = {}
       overrides["provider"] = options[:provider] if options[:provider]
-      overrides["model"] = options[:model] if options[:model]
-      overrides["planner_model"] = options[:planner_model] if options[:planner_model]
-      overrides["developer_model"] = options[:developer_model] if options[:developer_model]
-      overrides["reviewer_model"] = options[:reviewer_model] if options[:reviewer_model]
+      
+      # If only --model is provided (without role-specific models), cascade it to all roles
+      if options[:model] && !options[:planner_model] && !options[:developer_model] && !options[:reviewer_model]
+        overrides["model"] = options[:model]
+        overrides["planner_model"] = options[:model]
+        overrides["developer_model"] = options[:model]
+        overrides["reviewer_model"] = options[:model]
+      else
+        # Use explicit overrides if provided
+        overrides["model"] = options[:model] if options[:model]
+        overrides["planner_model"] = options[:planner_model] if options[:planner_model]
+        overrides["developer_model"] = options[:developer_model] if options[:developer_model]
+        overrides["reviewer_model"] = options[:reviewer_model] if options[:reviewer_model]
+      end
+      
       overrides["embed_model"] = options[:embed_model] if options[:embed_model]
       overrides
     end
