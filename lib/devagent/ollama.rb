@@ -2,60 +2,86 @@
 
 require "json"
 require "net/http"
+require "uri"
 
 module Devagent
-  # Ollama wraps local HTTP calls to the Ollama inference server.
-  class Ollama
-    ENDPOINT = URI("http://172.29.128.1:11434/api/generate")
+  module Ollama
+    # Client wraps HTTP calls to the Ollama server for generation, streaming, and embeddings.
+    class Client
+      DEFAULT_HOST = "http://localhost:11434"
 
-    class << self
-      def query(prompt, model:)
-        log_debug("Prompt", prompt)
-        response = perform_request(prompt, model)
-        log_debug("HTTP Response", response.body)
-        ensure_success!(response)
-        parsed = parse_response(response.body)
-        log_debug("Parsed Response", parsed)
-        parsed
+      def initialize(config = {})
+        host = config.fetch("host", DEFAULT_HOST)
+        @base_uri = URI(host)
+        @default_params = config.fetch("params", {})
+      end
+
+      def generate(prompt:, model:, params: {})
+        body = request_json("/api/generate", prompt: prompt, model: model, stream: false, options: params)
+        body.fetch("response")
+      end
+
+      def stream(prompt:, model:, params: {}, &)
+        request_stream("/api/generate", prompt: prompt, model: model, stream: true, options: params, &)
+      end
+
+      def embed(prompt:, model:)
+        response = request_json("/api/embeddings", prompt: prompt, model: model)
+        Array(response["embedding"] || response["embeddings"])
       end
 
       private
 
-      def perform_request(prompt, model)
-        request = Net::HTTP::Post.new(ENDPOINT, "Content-Type" => "application/json")
-        request.body = { model: model, prompt: prompt, stream: false }.to_json
+      attr_reader :base_uri, :default_params
 
-        Net::HTTP.start(ENDPOINT.hostname, ENDPOINT.port) do |http|
-          http.read_timeout = 120
-          http.request(request)
+      def request_json(path, payload)
+        response = http_post(path, payload)
+        JSON.parse(response.body)
+      rescue JSON::ParserError => e
+        raise Error, "Invalid JSON from Ollama: #{e.message}"
+      end
+
+      def request_stream(path, payload)
+        http = build_http
+        request = build_request(path, payload)
+        http.request(request) do |response|
+          raise Error, "Ollama #{response.code}" unless response.is_a?(Net::HTTPSuccess)
+
+          response.read_body do |chunk|
+            chunk.to_s.each_line do |line|
+              next if line.strip.empty?
+
+              data = JSON.parse(line)
+              token = data["response"]
+              yield token if token && block_given?
+            end
+          end
         end
       end
 
-      def ensure_success!(response)
-        return if response.is_a?(Net::HTTPSuccess)
+      def http_post(path, payload)
+        http = build_http
+        request = build_request(path, payload)
+        response = http.request(request)
+        raise Error, "Ollama #{response.code}: #{response.body}" unless response.is_a?(Net::HTTPSuccess)
 
-        raise "Ollama request failed (#{response.code}): #{response.body}"
+        response
       end
 
-      def parse_response(body)
-        parsed = JSON.parse(body)
-        parsed.fetch("response")
-      rescue JSON::ParserError
-        raise "Ollama returned invalid JSON"
+      def build_http
+        Net::HTTP.new(base_uri.host, base_uri.port).tap do |http|
+          http.read_timeout = 300
+        end
       end
 
-      def log_debug(label, data)
-        return unless debug_mode?
-
-        text = data.to_s
-        snippet = text.length > 200 ? "#{text[0, 200]}…" : text
-        $stderr.puts("[Ollama] #{label}: #{snippet}")
-      rescue StandardError
-        nil
-      end
-
-      def debug_mode?
-        ENV.fetch("DEVAGENT_DEBUG_LLM", nil)&.match?(/^(1|true|yes)$/i)
+      def build_request(path, payload)
+        request = Net::HTTP::Post.new(path)
+        request["Content-Type"] = "application/json"
+        merged = default_params.merge(payload.delete(:options) || {})
+        body = payload.dup
+        body[:options] = merged unless merged.empty?
+        request.body = body.to_json
+        request
       end
     end
   end
