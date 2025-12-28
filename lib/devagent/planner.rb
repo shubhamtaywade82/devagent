@@ -230,9 +230,10 @@ module Devagent
                       context.tool_registry.tools.values
                     end
 
-      tools = tool_values.map do |tool|
-        "- #{tool.name}: #{tool.description}"
-      end.join("\n")
+      tool_contracts = tool_values.map do |tool|
+        tool.respond_to?(:to_contract_hash) ? tool.to_contract_hash : { "name" => tool.name, "description" => tool.description }
+      end
+      tools_json = JSON.pretty_generate(tool_contracts)
 
       feedback_section = if feedback && !Array(feedback).empty?
                            "Known issues from reviewer:\n#{Array(feedback).join("\n")}"
@@ -251,8 +252,11 @@ module Devagent
 
         #{plugin_guidance}
 
-        Available tools:
-        #{tools}
+        You have access to the following tools. Each tool MUST be used strictly according to its contract.
+        Never invent tools. Never skip dependencies. Never assume side effects.
+
+        Tools (JSON):
+        #{tools_json}
 
         Recent conversation:
         #{history}

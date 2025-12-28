@@ -15,9 +15,13 @@ RSpec.describe Devagent::Planner do
   let(:index) { instance_double(Devagent::EmbeddingIndex, retrieve: []) }
   let(:session_memory) { instance_double(Devagent::SessionMemory, last_turns: []) }
   let(:tool_registry) do
-    double(tools: {
-             "fs_write" => double(name: "fs_write", description: "write", handler: :write_file)
-           })
+    double(
+      tools_for_phase: {
+        "fs.read" => double(name: "fs.read", description: "read"),
+        "fs.write" => double(name: "fs.write", description: "write"),
+        "exec.run" => double(name: "exec.run", description: "run")
+      }
+    )
   end
   let(:context) do
     instance_double(
@@ -36,8 +40,8 @@ RSpec.describe Devagent::Planner do
       "goal" => "Ship feature",
       "assumptions" => ["Repo is writable"],
       "steps" => [
-        { "step_id" => 1, "action" => "fs_read", "path" => "README.md", "command" => nil, "reason" => "Inspect existing docs", "depends_on" => [0] },
-        { "step_id" => 2, "action" => "fs_write", "path" => "README.md", "command" => nil, "reason" => "Update docs", "depends_on" => [1] }
+        { "step_id" => 1, "action" => "fs.read", "path" => "README.md", "command" => nil, "reason" => "Inspect existing docs", "depends_on" => [0] },
+        { "step_id" => 2, "action" => "fs.write", "path" => "README.md", "command" => nil, "reason" => "Update docs", "depends_on" => [1] }
       ],
       "success_criteria" => ["README updated"],
       "rollback_strategy" => "Revert the README changes",

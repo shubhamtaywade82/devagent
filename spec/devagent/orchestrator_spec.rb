@@ -28,7 +28,7 @@ RSpec.describe Devagent::Orchestrator do
       Devagent::ToolBus,
       reset!: nil,
       invoke: nil,
-      read_file: "",
+      read_file: { "path" => "file", "content" => "" },
       changes_made?: changes_made,
       run_tests: :ok
     )
@@ -37,8 +37,13 @@ RSpec.describe Devagent::Orchestrator do
     instance_double(
       Devagent::ToolRegistry,
       tools_for_phase: {
-        "fs_read" => double(name: "fs_read", description: "read"),
-        "fs_write_diff" => double(name: "fs_write_diff", description: "write diff")
+        "fs.read" => double(name: "fs.read", description: "read"),
+        "fs.write" => double(name: "fs.write", description: "write")
+      },
+      tools: {
+        "fs.read" => double(name: "fs.read", description: "read"),
+        "fs.write" => double(name: "fs.write", description: "write"),
+        "fs.write_diff" => double(name: "fs.write_diff", description: "internal")
       },
       fetch: double(allowed_phases: %i[execution])
     )
@@ -68,8 +73,8 @@ RSpec.describe Devagent::Orchestrator do
         goal: "Do work",
         assumptions: [],
         steps: [
-          { "step_id" => 1, "action" => "fs_read", "path" => "file", "command" => nil, "reason" => "read", "depends_on" => [0] },
-          { "step_id" => 2, "action" => "fs_write", "path" => "file", "command" => nil, "reason" => "write", "depends_on" => [1] }
+          { "step_id" => 1, "action" => "fs.read", "path" => "file", "command" => nil, "reason" => "read", "depends_on" => [0] },
+          { "step_id" => 2, "action" => "fs.write", "path" => "file", "command" => nil, "reason" => "write", "depends_on" => [1] }
         ],
         success_criteria: ["tests pass"],
         rollback_strategy: "revert",
@@ -90,8 +95,8 @@ RSpec.describe Devagent::Orchestrator do
       expect(session_memory).to have_received(:append).with("user", "build feature")
       expect(index).to have_received(:build!)
       expect(tool_bus).to have_received(:reset!).once
-      expect(tool_bus).to have_received(:invoke).with("type" => "fs_read", "args" => { "path" => "file" })
-      expect(tool_bus).to have_received(:invoke).with("type" => "fs_write_diff", "args" => hash_including("path" => "file"))
+      expect(tool_bus).to have_received(:invoke).with("type" => "fs.read", "args" => { "path" => "file" })
+      expect(tool_bus).to have_received(:invoke).with("type" => "fs.write_diff", "args" => hash_including("path" => "file"))
       expect(tool_bus).to have_received(:run_tests)
       expect(planner).to have_received(:plan).once
     end
@@ -126,7 +131,7 @@ RSpec.describe Devagent::Orchestrator do
           goal: "Do work",
           assumptions: [],
           steps: [
-            { "step_id" => 1, "action" => "fs_read", "path" => "file", "command" => nil, "reason" => "read", "depends_on" => [0] }
+            { "step_id" => 1, "action" => "fs.read", "path" => "file", "command" => nil, "reason" => "read", "depends_on" => [0] }
           ],
           success_criteria: [],
           rollback_strategy: "revert",

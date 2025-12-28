@@ -3,8 +3,12 @@
 require "diffy"
 require "English"
 require "fileutils"
+require "json"
+require "json-schema"
+require "timeout"
 require_relative "safety"
 require_relative "util"
+require_relative "prompts"
 
 module Devagent
   # ToolBus executes validated tool actions with safety checks and tracing.
@@ -41,9 +45,9 @@ module Devagent
       guard_path!(relative_path)
       full = File.join(context.repo_path, relative_path)
       context.tracer.event("read_file", path: relative_path)
-      return "" unless File.exist?(full)
+      content = File.exist?(full) ? File.read(full, encoding: "UTF-8") : ""
 
-      File.read(full, encoding: "UTF-8")
+      { "path" => relative_path, "content" => content }
     end
 
     def write_file(args)
@@ -84,7 +88,7 @@ module Devagent
       validate_diff!(relative_path, diff)
 
       context.tracer.event("fs_write_diff", path: relative_path)
-      return diff if dry_run?
+      return({ "applied" => false }) if dry_run?
 
       # We intentionally use git apply because it is the most reliable diff applier
       # for unified diffs and keeps behavior deterministic.
@@ -92,19 +96,19 @@ module Devagent
       raise Error, "diff apply failed" unless $CHILD_STATUS&.success?
 
       @changes_made = true
-      diff
+      { "applied" => true }
     end
 
     def delete_file(args)
       relative_path = args.fetch("path")
       guard_path!(relative_path)
       context.tracer.event("fs_delete", path: relative_path)
-      return :skipped if dry_run?
+      return({ "ok" => false }) if dry_run?
 
       full = File.join(context.repo_path, relative_path)
       FileUtils.rm_f(full)
       @changes_made = true
-      :ok
+      { "ok" => true }
     end
 
     def run_tests(args)
@@ -148,30 +152,80 @@ module Devagent
     def run_command(args)
       command = args.fetch("command")
       context.tracer.event("run_command", command: command)
-      return "skipped" if dry_run?
+      return({ "stdout" => "", "stderr" => "", "exit_code" => 0 }) if dry_run?
       raise Error, "command not allowed" unless command_allowed?(command)
 
-      # For certain commands (like rubocop, linters), non-zero exit codes
-      # indicate issues found, not execution failure. Capture output regardless.
-      if command_returns_meaningful_output_on_nonzero?(command)
+      timeout_s = (context.config.dig("auto", "command_timeout_seconds") || 60).to_i
+      max_bytes = (context.config.dig("auto", "command_max_output_bytes") || 20_000).to_i
+
+      result = nil
+      Timeout.timeout(timeout_s) do
         result = Util.run_capture(command, chdir: context.repo_path)
-        # Return structured result that includes output even on non-zero exit
-        {
-          "stdout" => result["stdout"],
-          "stderr" => result["stderr"],
-          "exit_code" => result["exit_code"],
-          "success" => true # Mark as success since we got output
-        }
-      else
-        # For other commands, use strict mode (fail on non-zero)
-        output = Util.run!(command, chdir: context.repo_path)
-        {
-          "stdout" => output,
-          "stderr" => "",
-          "exit_code" => 0,
-          "success" => true
-        }
       end
+
+      {
+        "stdout" => truncate_bytes(result["stdout"].to_s, max_bytes),
+        "stderr" => truncate_bytes(result["stderr"].to_s, max_bytes),
+        "exit_code" => result["exit_code"].to_i
+      }
+    rescue Timeout::Error
+      {
+        "stdout" => "",
+        "stderr" => "Command timed out after #{timeout_s}s",
+        "exit_code" => 124
+      }
+    end
+
+    def error_summary(args)
+      stderr = args.fetch("stderr").to_s
+      context.tracer.event("diagnostics_error_summary", bytes: stderr.bytesize)
+      return({ "root_cause" => "", "confidence" => 0.0 }) if stderr.strip.empty?
+
+      raw = context.query(
+        role: :developer,
+        prompt: <<~PROMPT,
+          #{Prompts::DIAGNOSTICS_ERROR_SUMMARY_SYSTEM}
+
+          STDERR:
+          #{stderr}
+        PROMPT
+        stream: false,
+        params: { temperature: 0.0 }
+      )
+
+      json = JSON.parse(raw.to_s)
+      JSON::Validator.validate!(
+        {
+          "type" => "object",
+          "required" => %w[root_cause confidence],
+          "properties" => {
+            "root_cause" => { "type" => "string" },
+            "confidence" => { "type" => "number", "minimum" => 0, "maximum" => 1 }
+          }
+        },
+        json
+      )
+      json
+    end
+
+    def git_status(_args)
+      context.tracer.event("git_status")
+      return({ "stdout" => "", "stderr" => "", "exit_code" => 0 }) if dry_run?
+      return({ "stdout" => "", "stderr" => "Not a git repository", "exit_code" => 1 }) unless git_repo?
+
+      r = Util.run_capture("git status --porcelain", chdir: context.repo_path)
+      { "stdout" => r["stdout"].to_s, "stderr" => r["stderr"].to_s, "exit_code" => r["exit_code"].to_i }
+    end
+
+    def git_diff(args)
+      staged = args["staged"] == true
+      context.tracer.event("git_diff", staged: staged)
+      return({ "stdout" => "", "stderr" => "", "exit_code" => 0 }) if dry_run?
+      return({ "stdout" => "", "stderr" => "Not a git repository", "exit_code" => 1 }) unless git_repo?
+
+      cmd = staged ? "git diff --cached" : "git diff"
+      r = Util.run_capture(cmd, chdir: context.repo_path)
+      { "stdout" => r["stdout"].to_s, "stderr" => r["stderr"].to_s, "exit_code" => r["exit_code"].to_i }
     end
 
     private
@@ -195,13 +249,6 @@ module Devagent
       end.first || "bundle exec rspec"
     end
 
-    def command_returns_meaningful_output_on_nonzero?(command)
-      # Commands that return non-zero exit codes to indicate issues found,
-      # but still produce valid output that should be analyzed
-      cmd = command.to_s.strip.downcase
-      %w[rubocop eslint flake8 pylint shellcheck].any? { |tool| cmd.include?(tool) }
-    end
-
     def command_allowed?(command)
       cmd = command.to_s.strip
       return false if cmd.empty?
@@ -212,13 +259,18 @@ module Devagent
         /\Agit\s+reset\b/i,
         /\Agit\s+clean\b/i,
         /\Arm\s+/i,
-        /\Asudo\b/i
+        /\Asudo\b/i,
+        /\bcurl\b.*\|\s*(sh|bash)\b/i,
+        /\bwget\b.*\|\s*(sh|bash)\b/i,
+        /\bbundle\s+install\b/i,
+        /\bnpm\s+install\b/i,
+        /\byarn\s+install\b/i
       ]
       return false if deny_patterns.any? { |re| cmd.match?(re) }
 
       allow = Array(context.config.dig("auto", "command_allowlist"))
-      # Back-compat: nil/empty allowlist means allow any command.
-      return true if allow.empty?
+      # Empty allowlist means "deny by default" for safety.
+      return false if allow.empty?
 
       allow.any? { |prefix| cmd.start_with?(prefix.to_s) }
     end
@@ -229,6 +281,15 @@ module Devagent
       raise Error, "diff missing hunk context" unless diff.include?("@@")
       expected = "--- a/#{path}"
       raise Error, "path mismatch in diff" unless diff.to_s.start_with?(expected)
+    end
+
+    def truncate_bytes(text, max_bytes)
+      return "" if text.nil?
+      s = text.to_s
+      return s if s.bytesize <= max_bytes
+
+      slice = s.byteslice(0, max_bytes)
+      "#{slice}\n... (truncated to #{max_bytes} bytes)"
     end
   end
 end

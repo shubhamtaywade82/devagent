@@ -10,7 +10,10 @@ RSpec.describe Devagent::ToolBus do
       "auto" => {
         "allowlist" => ["**/*"],
         "denylist" => [],
-        "dry_run" => false
+        "dry_run" => false,
+        "command_allowlist" => ["bundle exec", "echo", "ruby"],
+        "command_timeout_seconds" => 5,
+        "command_max_output_bytes" => 10_000
       }
     }
   end
@@ -114,20 +117,23 @@ RSpec.describe Devagent::ToolBus do
 
   describe "#run_command" do
     before do
-      allow(Devagent::Util).to receive(:run!).and_return("output")
+      allow(Devagent::Util).to receive(:run_capture).and_return(
+        { "stdout" => "output\n", "stderr" => "", "exit_code" => 0, "success" => true }
+      )
     end
 
     it "runs arbitrary commands inside the repo" do
-      tool_bus.run_command("command" => "echo hi")
+      result = tool_bus.run_command("command" => "echo hi")
 
-      expect(Devagent::Util).to have_received(:run!).with("echo hi", chdir: repo)
+      expect(result).to include("stdout" => "output\n", "stderr" => "", "exit_code" => 0)
+      expect(Devagent::Util).to have_received(:run_capture).with("echo hi", chdir: repo)
     end
 
     it "skips command execution in dry run" do
       config["auto"]["dry_run"] = true
 
-      expect(tool_bus.run_command("command" => "echo hi")).to eq("skipped")
-      expect(Devagent::Util).not_to have_received(:run!)
+      expect(tool_bus.run_command("command" => "echo hi")).to eq({ "stdout" => "", "stderr" => "", "exit_code" => 0 })
+      expect(Devagent::Util).not_to have_received(:run_capture)
     end
   end
 
@@ -136,7 +142,7 @@ RSpec.describe Devagent::ToolBus do
       FileUtils.mkdir_p(File.join(repo, "lib"))
       File.write(File.join(repo, "lib/to_delete.rb"), "puts 'bye'\n")
 
-      expect(tool_bus.delete_file("path" => "lib/to_delete.rb")).to eq(:ok)
+      expect(tool_bus.delete_file("path" => "lib/to_delete.rb")).to eq({ "ok" => true })
       expect(File.exist?(File.join(repo, "lib/to_delete.rb"))).to be(false)
       expect(tool_bus).to be_changes_made
     end
@@ -146,7 +152,7 @@ RSpec.describe Devagent::ToolBus do
       FileUtils.mkdir_p(File.join(repo, "lib"))
       File.write(File.join(repo, "lib/dry_delete.rb"), "puts 'bye'\n")
 
-      expect(tool_bus.delete_file("path" => "lib/dry_delete.rb")).to eq(:skipped)
+      expect(tool_bus.delete_file("path" => "lib/dry_delete.rb")).to eq({ "ok" => false })
       expect(File.exist?(File.join(repo, "lib/dry_delete.rb"))).to be(true)
       expect(tool_bus).not_to be_changes_made
     end

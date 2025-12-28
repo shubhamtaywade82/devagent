@@ -68,6 +68,9 @@ module Devagent
           "require_tests_green" => true,
           "dry_run" => false,
           "command_allowlist" => ["bundle exec", "ruby", "npm", "yarn", "rubocop", "rake", "make"],
+          "command_timeout_seconds" => 60,
+          "command_max_output_bytes" => 20_000,
+          "enable_git_tools" => false,
           "allowlist" => ["app/**", "lib/**", "spec/**", "config/**", "db/**", "src/**"],
           "denylist" => [".git/**", "node_modules/**", "log/**", "tmp/**", "dist/**", "build/**", ".env*",
                          "config/credentials*"]

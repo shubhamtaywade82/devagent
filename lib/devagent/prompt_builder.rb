@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "json"
+
 module Devagent
   # Builder pattern for constructing complex prompts in a composable, readable way.
   #
@@ -57,11 +59,18 @@ module Devagent
     end
 
     # Add available tools
-    def with_tools(tool_registry)
-      tools = tool_registry.tools.values.map do |tool|
-        "- #{tool.name}: #{tool.description}"
-      end.join("\n")
-      @sections[:tools] = tools
+    def with_tools(tool_registry, phase: :planning)
+      tool_values = if tool_registry.respond_to?(:visible_tools_for_phase)
+                      tool_registry.visible_tools_for_phase(phase)
+                    else
+                      tool_registry.tools.values
+                    end
+
+      tool_contracts = tool_values.map do |tool|
+        tool.respond_to?(:to_contract_hash) ? tool.to_contract_hash : { "name" => tool.name, "description" => tool.description }
+      end
+
+      @sections[:tools] = JSON.pretty_generate(tool_contracts)
       self
     end
 
