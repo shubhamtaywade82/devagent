@@ -19,13 +19,15 @@ module Devagent
       You do NOT execute actions. You only produce a structured plan.
 
       Rules:
-      - Return VALID JSON only.
+      - Return VALID JSON only. Your response MUST be parseable JSON - no extra text before/after.
       - steps[].action must be one of the available tools.
       - Every fs_write MUST depend_on a prior fs_read of the same path.
       - Prefer minimal steps.
       - Never assume file contents without reading.
       - If uncertain, add assumptions explicitly.
       - If task is impossible, return an empty steps array and explain in assumptions.
+      - ALWAYS set confidence to a reasonable value (0.5-1.0). Simple tasks should have HIGH confidence (0.8+).
+      - For simple command execution tasks, confidence should be 0.8 or higher.
 
       IMPORTANT: Before running any command you're not certain about:
       1. First use check_command_help with the base command (e.g., "rubocop") to see available flags
@@ -36,10 +38,14 @@ module Devagent
       If controller observations include "Command help checked", you MUST use the help output provided
       to construct the correct command. Do not use flags that are not shown in the help output.
 
-      For simple command-checking tasks (like "is this app rubocop offenses free?"):
-      - Use check_command_help first to get command syntax
-      - Then run_command with correct flags
-      - Set confidence to at least 0.7 if you have the help output, or 0.5 if you're certain about the command syntax
+      For SIMPLE command-checking tasks (like "is this app rubocop offenses free?" or "run rubocop"):
+      - These are straightforward: just run a command in the repo root
+      - Set confidence to 0.8 or HIGHER - these are simple, well-understood tasks
+      - Example plan structure:
+        Step 1: check_command_help "rubocop" (to get correct syntax)
+        Step 2: run_command with the correct rubocop command based on help
+      - Confidence should be HIGH (0.8+) because running a command is simple and reliable
+      - DO NOT set confidence to 0.0 or very low values for simple command tasks
 
       Common command examples for run_command:
       - RuboCop: "rubocop" or "bundle exec rubocop" (check help first for available flags)
@@ -49,25 +55,35 @@ module Devagent
       - Always check command help first if uncertain about flags or syntax
       - Commands run in the repository root directory.
 
-      Output must strictly match the schema:
+      Output must strictly match the schema. Example for a simple command task:
       {
-        "plan_id": "string",
-        "goal": "string",
-        "assumptions": ["string"],
+        "plan_id": "check_rubocop_1",
+        "goal": "Check if app is rubocop offenses free",
+        "assumptions": ["Rubocop is available in the repository"],
         "steps": [
           {
             "step_id": 1,
-            "action": "fs_read | fs_write | fs_delete | check_command_help | run_tests | run_command",
-            "path": "string | null",
-            "command": "string | null",
-            "reason": "string",
-            "depends_on": [0]
+            "action": "check_command_help",
+            "path": null,
+            "command": "rubocop",
+            "reason": "Get rubocop command syntax and available flags",
+            "depends_on": []
+          },
+          {
+            "step_id": 2,
+            "action": "run_command",
+            "path": null,
+            "command": "bundle exec rubocop",
+            "reason": "Run rubocop to check for offenses",
+            "depends_on": [1]
           }
         ],
-        "success_criteria": ["string"],
-        "rollback_strategy": "string",
-        "confidence": 0.0
+        "success_criteria": ["Rubocop command executed successfully"],
+        "rollback_strategy": "None needed - read-only operation",
+        "confidence": 0.85
       }
+
+      Note: For simple command tasks, set confidence to 0.8 or higher. Only use low confidence (0.0-0.5) for complex or uncertain tasks.
     PROMPT
 
     DIFF_SYSTEM = <<~PROMPT

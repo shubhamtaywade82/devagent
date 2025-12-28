@@ -36,8 +36,8 @@ module Devagent
             "properties" => {
               "step_id" => { "type" => "integer", "minimum" => 1 },
               "action" => { "type" => "string" },
-              "path" => { "type" => %w[string null] },
-              "command" => { "type" => %w[string null] },
+              "path" => { "type" => ["string", "null"] },
+              "command" => { "type" => ["string", "null"] },
               "reason" => { "type" => "string" },
               "depends_on" => { "type" => "array", "items" => { "type" => "integer", "minimum" => 0 } }
             }

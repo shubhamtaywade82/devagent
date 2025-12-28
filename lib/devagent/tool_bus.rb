@@ -151,7 +151,27 @@ module Devagent
       return "skipped" if dry_run?
       raise Error, "command not allowed" unless command_allowed?(command)
 
-      Util.run!(command, chdir: context.repo_path)
+      # For certain commands (like rubocop, linters), non-zero exit codes
+      # indicate issues found, not execution failure. Capture output regardless.
+      if command_returns_meaningful_output_on_nonzero?(command)
+        result = Util.run_capture(command, chdir: context.repo_path)
+        # Return structured result that includes output even on non-zero exit
+        {
+          "stdout" => result["stdout"],
+          "stderr" => result["stderr"],
+          "exit_code" => result["exit_code"],
+          "success" => true # Mark as success since we got output
+        }
+      else
+        # For other commands, use strict mode (fail on non-zero)
+        output = Util.run!(command, chdir: context.repo_path)
+        {
+          "stdout" => output,
+          "stderr" => "",
+          "exit_code" => 0,
+          "success" => true
+        }
+      end
     end
 
     private
@@ -173,6 +193,13 @@ module Devagent
       context.plugins.filter_map do |plugin|
         plugin.respond_to?(:test_command) ? plugin.test_command(context) : nil
       end.first || "bundle exec rspec"
+    end
+
+    def command_returns_meaningful_output_on_nonzero?(command)
+      # Commands that return non-zero exit codes to indicate issues found,
+      # but still produce valid output that should be analyzed
+      cmd = command.to_s.strip.downcase
+      %w[rubocop eslint flake8 pylint shellcheck].any? { |tool| cmd.include?(tool) }
     end
 
     def command_allowed?(command)

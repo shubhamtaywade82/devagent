@@ -68,9 +68,33 @@ module Devagent
                                        steps: plan.steps)
           streamer.say("Plan: #{plan.goal} (#{(plan.confidence * 100).round}%)") if plan.goal && !quiet?
 
+          # Check if we should use fallback for command-checking questions with low confidence
+          if question_requires_command?(task) && plan.confidence.to_f < 0.3
+            unless quiet?
+              streamer.say("Planning generated low confidence. Using fallback plan for command execution...",
+                           level: :warn)
+            end
+            minimal_plan = create_minimal_command_plan(task)
+            if minimal_plan
+              state.plan = minimal_plan
+              state.phase = :execution
+              next
+            end
+          end
+
           begin
             validate_plan!(state, plan, visible_tools: visible_tools)
           rescue StandardError => e
+            # If validation fails for a command-checking question, try fallback
+            if question_requires_command?(task)
+              streamer.say("Plan validation failed. Trying fallback plan...", level: :warn) unless quiet?
+              minimal_plan = create_minimal_command_plan(task)
+              if minimal_plan
+                state.plan = minimal_plan
+                state.phase = :execution
+                next
+              end
+            end
             state.record_error(signature: "plan_rejected", message: e.message)
             state.record_observation({ "type" => "PLAN_REJECTED", "message" => e.message })
             state.phase = :decision
@@ -78,14 +102,6 @@ module Devagent
           end
 
           if plan.steps.empty?
-            # If plan is empty but we have a command-checking question, try to help
-            if question_requires_command?(task) && plan.confidence.to_f < 0.3
-              streamer.say("Planning failed. Trying direct command execution...", level: :warn) unless quiet?
-              # For simple command questions, create a minimal plan
-              state.plan = create_minimal_command_plan(task)
-              state.phase = :execution
-              next
-            end
             state.phase = :done
             answer_unactionable(task, plan.confidence)
             next
@@ -217,7 +233,13 @@ module Devagent
 
       result = context.tool_bus.invoke("type" => tool_name, "args" => args)
       record_artifacts(state, tool_name, args, result)
-      { "success" => true, "artifact" => result }
+
+      # Handle structured results from run_command (hash with stdout/stderr/exit_code)
+      if result.is_a?(Hash) && result.key?("stdout")
+        { "success" => result["success"], "artifact" => result }
+      else
+        { "success" => true, "artifact" => result }
+      end
     end
 
     def record_artifacts(state, tool_name, args, result)
@@ -235,6 +257,16 @@ module Devagent
                                    "help_output" => help_text })
       when "run_command"
         state.record_command(args["command"])
+        # Record command output if available (for structured results)
+        if result.is_a?(Hash) && result.key?("stdout")
+          state.record_observation({
+                                     "type" => "COMMAND_EXECUTED",
+                                     "command" => args["command"],
+                                     "stdout" => truncate_output(result["stdout"], lines: 20),
+                                     "stderr" => truncate_output(result["stderr"], lines: 20),
+                                     "exit_code" => result["exit_code"]
+                                   })
+        end
       when "run_tests"
         state.record_observation({ "type" => "TESTS_REQUESTED", "command" => args["command"] })
       end
@@ -389,7 +421,16 @@ module Devagent
       help_observations = recent.select { |o| o["type"] == "COMMAND_HELP_CHECKED" }
       help_observations.each do |obs|
         parts << "Command help checked for: #{obs["command"]}"
-        parts << "Help output:\n#{obs["help_output"]}\n---"
+        parts << "Help output: #{obs["help_output"]}" if obs["help_output"]
+      end
+
+      # Include command execution results
+      command_observations = recent.select { |o| o["type"] == "COMMAND_EXECUTED" }
+      command_observations.each do |obs|
+        parts << "Command executed: #{obs["command"]}"
+        parts << "Exit code: #{obs["exit_code"]}"
+        parts << "STDOUT (last 20 lines):\n#{obs["stdout"]}" if obs["stdout"] && !obs["stdout"].empty?
+        parts << "STDERR (last 20 lines):\n#{obs["stderr"]}" if obs["stderr"] && !obs["stderr"].empty?
       end
 
       parts << "Recent observations: #{recent.map { |o| o["type"] }.join(", ")}" unless recent.empty?
@@ -672,6 +713,17 @@ module Devagent
       end
 
       result.join("\n")
+    end
+
+    def truncate_output(output, lines: 20)
+      return "" if output.nil? || output.empty?
+
+      output_lines = output.split("\n")
+      return output if output_lines.size <= lines
+
+      # Return last N lines with a note
+      truncated = output_lines.last(lines).join("\n")
+      "#{truncated}\n... (showing last #{lines} of #{output_lines.size} lines)"
     end
   end
 end
