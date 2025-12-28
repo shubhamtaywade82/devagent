@@ -20,6 +20,11 @@ module Devagent
     :confidence,
     :cycle,
     :tool_rejections,
+    :current_step,
+    :step_results,
+    :files_read_meta,
+    :last_decision,
+    :last_decision_confidence,
     :last_error_signature,
     :repeat_error_count,
     keyword_init: true
@@ -45,13 +50,20 @@ module Devagent
         confidence: 0.0,
         cycle: 0,
         tool_rejections: 0,
+        current_step: 0,
+        step_results: {},
+        files_read_meta: {},
+        last_decision: nil,
+        last_decision_confidence: nil,
         last_error_signature: nil,
         repeat_error_count: 0
       )
     end
 
-    def record_file_read(path)
-      artifacts[:files_read] << path.to_s
+    def record_file_read(path, meta: nil)
+      p = path.to_s
+      artifacts[:files_read] << p
+      files_read_meta[p] = meta if meta
     end
 
     def record_file_written(path)

@@ -77,6 +77,24 @@ module Devagent
       patch
     end
 
+    def write_diff(args)
+      relative_path = args.fetch("path")
+      diff = args.fetch("diff")
+      guard_path!(relative_path)
+      validate_diff!(relative_path, diff)
+
+      context.tracer.event("fs_write_diff", path: relative_path)
+      return diff if dry_run?
+
+      # We intentionally use git apply because it is the most reliable diff applier
+      # for unified diffs and keeps behavior deterministic.
+      IO.popen(["git", "-C", context.repo_path, "apply", "--whitespace=nowarn", "-"], "w") { |io| io.write(diff) }
+      raise Error, "diff apply failed" unless $CHILD_STATUS&.success?
+
+      @changes_made = true
+      diff
+    end
+
     def run_tests(args)
       command = args["command"] || default_test_command
       context.tracer.event("run_tests", command: command)
@@ -136,6 +154,14 @@ module Devagent
       return true if allow.empty?
 
       allow.any? { |prefix| cmd.start_with?(prefix.to_s) }
+    end
+
+    def validate_diff!(path, diff)
+      lines = diff.to_s.lines
+      raise Error, "diff too large" if lines.count > 200
+      raise Error, "diff missing hunk context" unless diff.include?("@@")
+      expected = "--- a/#{path}"
+      raise Error, "path mismatch in diff" unless diff.to_s.start_with?(expected)
     end
   end
 end

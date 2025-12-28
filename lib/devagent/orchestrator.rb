@@ -6,6 +6,8 @@ require_relative "streamer"
 require_relative "ui"
 require_relative "agent_state"
 require_relative "intent_classifier"
+require_relative "diff_generator"
+require_relative "decision_engine"
 
 module Devagent
   # Orchestrator coordinates planning, execution, and testing loops.
@@ -52,10 +54,19 @@ module Devagent
           end
 
           state.plan = plan
-          context.tracer.event("plan", summary: plan.summary, confidence: plan.confidence, actions: plan.actions)
-          streamer.say("Plan: #{plan.summary} (#{(plan.confidence * 100).round}%)") if plan.summary && !quiet?
+          context.tracer.event("plan", plan_id: plan.plan_id, goal: plan.goal, confidence: plan.confidence, steps: plan.steps)
+          streamer.say("Plan: #{plan.goal} (#{(plan.confidence * 100).round}%)") if plan.goal && !quiet?
 
-          if plan.actions.empty?
+          begin
+            validate_plan!(plan, visible_tools: visible_tools)
+          rescue StandardError => e
+            state.record_error(signature: "plan_rejected", message: e.message)
+            state.record_observation({ "type" => "PLAN_REJECTED", "message" => e.message })
+            state.phase = :decision
+            next
+          end
+
+          if plan.steps.empty?
             state.phase = :done
             answer_unactionable(task, plan.confidence)
             next
@@ -67,7 +78,7 @@ module Devagent
           state.cycle += 1
           streamer.say("Cycle #{state.cycle}/#{max_cycles}") unless quiet?
           context.tool_bus.reset!
-          execute_actions(state, state.plan.actions)
+          execute_plan(state)
           state.phase = :observation
 
         when :observation
@@ -95,61 +106,115 @@ module Devagent
 
     private
 
-    def execute_actions(state, actions)
-      actions.each do |action|
-        context.tracer.event("execute_action", action: action)
-        execute_action_with_policy(state, action)
+    def execute_plan(state)
+      plan = state.plan
+      plan.steps.each do |step|
+        state.current_step = step["step_id"].to_i
+        ensure_dependencies!(step, state.step_results)
+        result = execute_step(state, plan, step)
+        state.step_results[step["step_id"]] = result
+        state.record_observation(normalize_step_observation(result, step))
+        raise Error, "step #{step["step_id"]} failed" unless result["success"]
       rescue StandardError => e
-        streamer.say("Action #{action["type"]} failed: #{e.message}", level: :error)
-        state.record_error(signature: "action_failed:#{action["type"]}", message: e.message)
-        state.record_observation({ "type" => "ACTION_FAILED", "tool" => action["type"], "message" => e.message })
+        streamer.say("Step #{step["step_id"]} failed: #{e.message}", level: :error)
+        state.record_error(signature: "step_failed:#{step["step_id"]}", message: e.message)
+        state.step_results[step["step_id"]] = { "success" => false, "error" => e.message }
+        state.record_observation({ "type" => "STEP_FAILED", "step_id" => step["step_id"], "status" => "FAIL", "error" => e.message })
         break
       end
     end
 
-    def execute_action_with_policy(state, action)
-      name = action.fetch("type")
-      args = action.fetch("args", {}) || {}
+    def ensure_dependencies!(step, results)
+      Array(step["depends_on"]).each do |dep|
+        next if dep.to_i == 0
+        res = results[dep]
+        raise Error, "Dependency #{dep} not satisfied" unless res && res["success"]
+      end
+    end
 
-      tool = context.tool_registry.fetch(name)
-      raise Error, "Unknown tool #{name}" unless tool
+    def execute_step(state, plan, step)
+      action = step["action"].to_s
+      path = step["path"]
+      command = step["command"]
+
+      case action
+      when "fs_read"
+        tool_invoke_with_policy(state, "fs_read", "path" => path)
+      when "fs_write"
+        # diff-first write: read must have happened, then generate diff, then apply diff.
+        raise Error, "path required" if path.to_s.empty?
+        ensure_read_same_path!(state, path)
+        original = context.tool_bus.read_file("path" => path.to_s)
+        diff = DiffGenerator.new(context).generate(path: path.to_s, original: original, goal: plan.goal.to_s, reason: step["reason"].to_s)
+        tool_invoke_with_policy(state, "fs_write_diff", "path" => path.to_s, "diff" => diff)
+      when "run_tests"
+        tool_invoke_with_policy(state, "run_tests", "command" => command)
+      when "run_command"
+        tool_invoke_with_policy(state, "run_command", "command" => command)
+      else
+        raise Error, "Unknown step action #{action}"
+      end
+    end
+
+    def tool_invoke_with_policy(state, tool_name, args)
+      tool = context.tool_registry.fetch(tool_name)
+      raise Error, "Unknown tool #{tool_name}" unless tool
 
       allowed = tool.allowed_phases.nil? || Array(tool.allowed_phases).map(&:to_sym).include?(state.phase)
       unless allowed
         state.tool_rejections += 1
-        state.record_observation({ "type" => "TOOL_REJECTED", "tool" => name, "reason" => "forbidden_in_phase" })
-        raise Error, "Tool #{name} forbidden in phase #{state.phase}"
+        raise Error, "Tool #{tool_name} forbidden in phase #{state.phase}"
       end
 
-      if name == "fs_write"
-        path = args["path"]
-        unless state.artifacts[:files_read].include?(path.to_s)
-          state.tool_rejections += 1
-          state.record_observation({ "type" => "TOOL_REJECTED", "tool" => name, "reason" => "missing_dependency",
-                                     "depends_on" => "fs_read", "path" => path })
-          raise Error, "Tool #{name} requires fs_read of #{path} first"
-        end
-      end
+      result = context.tool_bus.invoke("type" => tool_name, "args" => args)
+      record_artifacts(state, tool_name, args, result)
+      { "success" => true, "artifact" => result }
+    end
 
-      result = context.tool_bus.invoke(action)
-      case name
+    def record_artifacts(state, tool_name, args, result)
+      case tool_name
       when "fs_read"
-        state.record_file_read(args["path"])
-        state.record_observation({ "type" => "FILE_READ", "path" => args["path"], "bytes" => result.to_s.bytesize })
-      when "fs_write"
+        state.record_file_read(args["path"], meta: file_meta(args["path"]))
+      when "fs_write_diff"
         state.record_file_written(args["path"])
-        state.record_observation({ "type" => "FILE_WRITTEN", "path" => args["path"] })
       when "git_apply"
         state.record_patch_applied
-        state.record_observation({ "type" => "PATCH_APPLIED" })
       when "run_command"
         state.record_command(args["command"])
-        state.record_observation({ "type" => "COMMAND_RAN", "command" => args["command"] })
       when "run_tests"
         state.record_observation({ "type" => "TESTS_REQUESTED", "command" => args["command"] })
       end
+    end
 
-      result
+    def ensure_read_same_path!(state, path)
+      p = path.to_s
+      raise Error, "fs_write requires prior fs_read of #{p}" unless state.artifacts[:files_read].include?(p)
+
+      meta = state.files_read_meta[p]
+      return if meta.nil? # best-effort; e.g. file didn't exist
+
+      current = file_meta(p)
+      raise Error, "file changed since read: #{p}" unless current["mtime"].to_f == meta["mtime"].to_f
+    end
+
+    def file_meta(relative_path)
+      full = File.join(context.repo_path, relative_path.to_s)
+      return { "mtime" => 0.0, "size" => 0 } unless File.exist?(full)
+
+      st = File.stat(full)
+      { "mtime" => st.mtime.to_f, "size" => st.size }
+    rescue StandardError
+      { "mtime" => 0.0, "size" => 0 }
+    end
+
+    def normalize_step_observation(result, step)
+      {
+        "type" => step["action"].to_s.upcase,
+        "step_id" => step["step_id"],
+        "status" => result["success"] ? "OK" : "FAIL",
+        "artifact" => result["artifact"],
+        "error" => result["error"]
+      }
     end
 
     def observe_after_execution(state)
@@ -271,29 +336,79 @@ module Devagent
     end
 
     def decision_next_phase(state, task, max_cycles:)
-      if state.observations.any? { |o| o["type"] == "TEST_RESULT" && o["status"] == "FAIL" }
-        streamer.say("Tests failed, replanning…", level: :warn) unless quiet?
-        context.session_memory.append("assistant", "Tests failed on cycle #{state.cycle}")
-        context.tracer.event("tests_failed")
-        state.phase = state.cycle < max_cycles ? :planning : :halted
+      decision = DecisionEngine.new(context).decide(
+        plan: plan_payload(state.plan),
+        step_results: state.step_results,
+        observations: state.observations.last(30)
+      )
+
+      if state.last_decision && state.last_decision == decision["decision"]
+        state.phase = :halted
+        streamer.say("Halting: repeated decision #{decision["decision"]}.", level: :warn) unless quiet?
         return
       end
 
-      if state.observations.any? { |o| o["type"] == "NO_CHANGES" }
-        streamer.say("No changes detected; answering directly.") unless quiet?
-        answer_unactionable(task, state.plan&.confidence.to_f)
+      if state.last_decision_confidence && decision["confidence"].to_f < state.last_decision_confidence.to_f
+        state.phase = :halted
+        streamer.say("Halting: decision confidence decreased.", level: :warn) unless quiet?
+        return
+      end
+
+      state.last_decision = decision["decision"]
+      state.last_decision_confidence = decision["confidence"].to_f
+
+      case decision["decision"]
+      when "SUCCESS"
+        state.confidence = decision["confidence"].to_f
         state.phase = :done
-        return
+      when "RETRY"
+        streamer.say("Retrying: #{decision["reason"]}", level: :warn) unless quiet?
+        state.phase = state.cycle < max_cycles ? :planning : :halted
+      else
+        streamer.say("Blocked: #{decision["reason"]}", level: :warn) unless quiet?
+        state.phase = :halted
       end
-
-      state.confidence = 1.0
-      state.phase = :done
     end
 
     def hard_stop?(state, max_cycles:)
       return true if state.tool_rejections >= 2
       return true if state.repeat_error_count >= 2
       false
+    end
+
+    def validate_plan!(plan, visible_tools:)
+      raise Error, "plan confidence too low" if plan.confidence.to_f < 0.5
+
+      allowed = Array(visible_tools).map(&:name)
+      step_actions = plan.steps.map { |s| s["action"].to_s }
+      unknown = step_actions.reject { |a| allowed.include?(a) || a == "fs_write" } # fs_write is logical action
+      raise Error, "plan uses unknown tools: #{unknown.uniq.join(", ")}" unless unknown.empty?
+
+      # Enforce: every fs_write depends on a prior fs_read of the same path.
+      reads = {}
+      plan.steps.each do |s|
+        reads[s["step_id"]] = s["path"].to_s if s["action"] == "fs_read"
+      end
+
+      plan.steps.each do |s|
+        next unless s["action"] == "fs_write"
+        path = s["path"].to_s
+        deps = Array(s["depends_on"]).map(&:to_i)
+        dep_paths = deps.filter_map { |id| reads[id] }
+        raise Error, "fs_write must depend_on prior fs_read of same path (#{path})" unless dep_paths.include?(path)
+      end
+    end
+
+    def plan_payload(plan)
+      {
+        "plan_id" => plan.plan_id,
+        "goal" => plan.goal,
+        "assumptions" => Array(plan.assumptions),
+        "steps" => Array(plan.steps),
+        "success_criteria" => Array(plan.success_criteria),
+        "rollback_strategy" => plan.rollback_strategy,
+        "confidence" => plan.confidence
+      }
     end
 
     def safe_index_retrieve(task, limit: 6)

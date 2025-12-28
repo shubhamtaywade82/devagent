@@ -5,7 +5,18 @@ require "json-schema"
 require_relative "prompts"
 
 module Devagent
-  Plan = Struct.new(:summary, :actions, :confidence, :goal, :steps, :success_criteria, keyword_init: true)
+  Plan = Struct.new(
+    :plan_id,
+    :goal,
+    :assumptions,
+    :steps,
+    :success_criteria,
+    :rollback_strategy,
+    :confidence,
+    :actions,
+    :summary,
+    keyword_init: true
+  )
 
   # Planner coordinates with the planning and review models to produce
   # validated actions.
@@ -13,25 +24,26 @@ module Devagent
     PLAN_SCHEMA = {
       "type" => "object",
       "required" => %w[confidence],
-      "anyOf" => [
-        { "required" => ["steps"] },
-        { "required" => ["actions"] }
-      ],
+      "anyOf" => [{ "required" => ["steps"] }, { "required" => ["actions"] }],
       "properties" => {
         "confidence" => { "type" => "number", "minimum" => 0, "maximum" => 1 },
-        "summary" => { "type" => "string" },
+        "plan_id" => { "type" => "string" },
         "goal" => { "type" => "string" },
+        "assumptions" => { "type" => "array", "items" => { "type" => "string" } },
+        "rollback_strategy" => { "type" => "string" },
         "success_criteria" => { "type" => "array", "items" => { "type" => "string" } },
         "steps" => {
           "type" => "array",
           "items" => {
             "type" => "object",
-            "required" => %w[id tool args reason],
+            "required" => %w[step_id action path command reason depends_on],
             "properties" => {
-              "id" => { "type" => "integer", "minimum" => 1 },
-              "tool" => { "type" => "string" },
-              "args" => { "type" => "object" },
-              "reason" => { "type" => "string" }
+              "step_id" => { "type" => "integer", "minimum" => 1 },
+              "action" => { "type" => "string" },
+              "path" => { "type" => %w[string null] },
+              "command" => { "type" => %w[string null] },
+              "reason" => { "type" => "string" },
+              "depends_on" => { "type" => "array", "items" => { "type" => "integer", "minimum" => 0 } }
             }
           }
         },
@@ -74,25 +86,39 @@ module Devagent
         if review["approved"] || attempts >= 1
           steps = Array(payload["steps"]).map do |step|
             {
-              "id" => step["id"],
-              "tool" => step["tool"],
-              "args" => step["args"] || {},
-              "reason" => step["reason"]
+              "step_id" => step["step_id"],
+              "action" => step["action"],
+              "path" => step["path"],
+              "command" => step["command"],
+              "reason" => step["reason"],
+              "depends_on" => Array(step["depends_on"])
             }
           end
-          actions = if !steps.empty?
-                      steps.map { |s| { "type" => s["tool"], "args" => s["args"] } }
-                    else
-                      Array(payload["actions"])
-                    end
+
+          # Back-compat: allow legacy "actions" plans by wrapping into step form.
+          if steps.empty? && payload["actions"]
+            steps = Array(payload["actions"]).each_with_index.map do |action, idx|
+              {
+                "step_id" => idx + 1,
+                "action" => action["type"],
+                "path" => action.dig("args", "path"),
+                "command" => action.dig("args", "command"),
+                "reason" => "legacy action",
+                "depends_on" => []
+              }
+            end
+          end
 
           break Plan.new(
-            summary: payload["summary"],
+            plan_id: payload["plan_id"],
             goal: payload["goal"],
+            assumptions: Array(payload["assumptions"]),
             steps: steps,
             success_criteria: Array(payload["success_criteria"]),
-            actions: actions,
-            confidence: payload["confidence"].to_f
+            rollback_strategy: payload["rollback_strategy"].to_s,
+            confidence: payload["confidence"].to_f,
+            summary: payload["goal"].to_s,
+            actions: [] # no longer used for execution
           )
         end
 
@@ -145,7 +171,15 @@ module Devagent
       json
     rescue JSON::ParserError, JSON::Schema::ValidationError => e
       context.tracer.event("plan_invalid_json", message: e.message, raw: raw)
-      { "confidence" => 0.0, "summary" => "invalid plan", "goal" => "", "steps" => [], "success_criteria" => [] }
+      {
+        "confidence" => 0.0,
+        "plan_id" => "",
+        "goal" => "",
+        "assumptions" => ["invalid plan JSON/schema"],
+        "steps" => [],
+        "success_criteria" => [],
+        "rollback_strategy" => ""
+      }
     end
 
     def parse_review(raw)

@@ -64,6 +64,24 @@ module Devagent
           safety: ["NO_READ_OUTSIDE_PROJECT"]
         ),
         Tool.new(
+          name: "fs_write_diff",
+          schema: {
+            "type" => "object",
+            "required" => %w[path diff],
+            "properties" => {
+              "path" => { "type" => "string" },
+              "diff" => { "type" => "string" }
+            }
+          },
+          handler: :write_diff,
+          description: "Apply a unified diff to a file (diff-first edits).",
+          allowed_phases: %i[execution],
+          visible_phases: %i[planning],
+          depends_on: ["fs_read"],
+          side_effects: ["MODIFIES_FS"],
+          safety: ["NO_WRITE_OUTSIDE_PROJECT"]
+        ),
+        Tool.new(
           name: "fs_write",
           schema: {
             "type" => "object",
@@ -76,7 +94,7 @@ module Devagent
           handler: :write_file,
           description: "Write or replace the full contents of a file.",
           allowed_phases: %i[execution],
-          visible_phases: %i[planning],
+          visible_phases: [],
           depends_on: ["fs_read"],
           side_effects: ["MODIFIES_FS"],
           safety: ["NO_WRITE_OUTSIDE_PROJECT"]

@@ -32,13 +32,16 @@ RSpec.describe Devagent::Planner do
 
   let(:plan_json) do
     {
-      "confidence" => 0.9,
-      "summary" => "Implement feature",
+      "plan_id" => "test-plan",
       "goal" => "Ship feature",
+      "assumptions" => ["Repo is writable"],
       "steps" => [
-        { "id" => 1, "tool" => "fs_write", "args" => { "path" => "README.md", "content" => "text" }, "reason" => "Update docs" }
+        { "step_id" => 1, "action" => "fs_read", "path" => "README.md", "command" => nil, "reason" => "Inspect existing docs", "depends_on" => [0] },
+        { "step_id" => 2, "action" => "fs_write", "path" => "README.md", "command" => nil, "reason" => "Update docs", "depends_on" => [1] }
       ],
-      "success_criteria" => ["README updated"]
+      "success_criteria" => ["README updated"],
+      "rollback_strategy" => "Revert the README changes",
+      "confidence" => 0.9
     }.to_json
   end
 
@@ -65,9 +68,8 @@ RSpec.describe Devagent::Planner do
     plan = planner.plan("Ship feature")
 
     expect(plan.confidence).to eq(0.9)
-    expect(plan.summary).to eq("Implement feature")
-    expect(plan.actions.length).to eq(1)
-    expect(plan.steps.length).to eq(1)
+    expect(plan.goal).to eq("Ship feature")
+    expect(plan.steps.length).to eq(2)
     expect(plan.success_criteria).to include("README updated")
     expect(streamer).to have_received(:with_stream).with(:planner)
     expect(tokens).to include("{")
