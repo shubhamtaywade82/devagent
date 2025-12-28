@@ -1,0 +1,19 @@
+current directory: /workspace/vendor/bundle/ruby/3.2.0/gems/erb-5.0.2/ext/erb/escape
+/usr/bin/ruby3.2 -I/usr/lib/ruby/vendor_ruby extconf.rb
+checking for rb_ext_ractor_safe() in ruby.h... yes
+creating Makefile
+
+current directory: /workspace/vendor/bundle/ruby/3.2.0/gems/erb-5.0.2/ext/erb/escape
+make DESTDIR\= sitearchdir\=./.gem.20251228-2846-k9s3nt sitelibdir\=./.gem.20251228-2846-k9s3nt clean
+
+current directory: /workspace/vendor/bundle/ruby/3.2.0/gems/erb-5.0.2/ext/erb/escape
+make DESTDIR\= sitearchdir\=./.gem.20251228-2846-k9s3nt sitelibdir\=./.gem.20251228-2846-k9s3nt
+compiling escape.c
+linking shared-object erb/escape.so
+
+current directory: /workspace/vendor/bundle/ruby/3.2.0/gems/erb-5.0.2/ext/erb/escape
+make DESTDIR\= sitearchdir\=./.gem.20251228-2846-k9s3nt sitelibdir\=./.gem.20251228-2846-k9s3nt install
+/usr/bin/install -c -m 0755 escape.so ./.gem.20251228-2846-k9s3nt/erb
+
+current directory: /workspace/vendor/bundle/ruby/3.2.0/gems/erb-5.0.2/ext/erb/escape
+make DESTDIR\= sitearchdir\=./.gem.20251228-2846-k9s3nt sitelibdir\=./.gem.20251228-2846-k9s3nt clean
