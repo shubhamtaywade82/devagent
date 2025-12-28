@@ -7,7 +7,6 @@ require_relative "history"
 module Devagent
   # Auto provides a simple REPL shell for the autonomous agent.
   class Auto
-    PROMPT = "devagent> "
     EXIT = %w[exit quit].freeze
 
     def initialize(context, input: $stdin, output: $stdout, ui: nil)
@@ -25,7 +24,7 @@ module Devagent
       # Initialize Readline history
       reader.update_history
       loop do
-        line = reader.read_line(PROMPT)
+        line = reader.read_line(formatted_prompt)
         break if line.nil? || EXIT.include?(line.strip.downcase)
         next if line.strip.empty?
 
@@ -54,6 +53,15 @@ module Devagent
     private
 
     attr_reader :context, :reader, :output, :orchestrator, :ui, :history
+
+    def formatted_prompt
+      prompt_text = "devagent ❯ "
+      if ui.colorizer.enabled?
+        ui.colorizer.colorize(:prompt, prompt_text)
+      else
+        prompt_text
+      end
+    end
 
     def log(level, message)
       if ui&.respond_to?(:logger)
