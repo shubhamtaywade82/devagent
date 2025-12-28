@@ -431,12 +431,22 @@ module Devagent
       raise Error, "plan confidence too low" if plan.confidence.to_f < 0.5
 
       allowed = Array(visible_tools).map(&:name)
+      # Also check all tools in registry (for run_command/run_tests that might not be in visible_tools)
+      all_tool_names = context.tool_registry.tools.keys
+      allowed_names = (allowed + all_tool_names).uniq
+
       step_actions = plan.steps.map { |s| s["action"].to_s }
-      unknown = step_actions.reject { |a| allowed.include?(a) || a == "fs_write" } # fs_write is logical action
+      # fs_write is a logical action that gets converted to fs_write_diff
+      # run_command and run_tests are always allowed for command execution
+      unknown = step_actions.reject do |a|
+        allowed_names.include?(a) || a == "fs_write" || a == "run_command" || a == "run_tests"
+      end
       raise Error, "plan uses unknown tools: #{unknown.uniq.join(", ")}" unless unknown.empty?
 
       # Read scope limiter: first cycle may read at most one file.
-      if state.cycle.to_i == 0
+      # Exception: if plan only contains commands (no file operations), allow it
+      command_only = plan.steps.all? { |s| %w[run_command run_tests].include?(s["action"].to_s) }
+      if state.cycle.to_i == 0 && !command_only
         reads = plan.steps.count { |s| s["action"].to_s == "fs_read" }
         raise Error, "too many reads in first plan" if reads > 1
       end
