@@ -67,7 +67,7 @@ module Devagent
           "max_iterations" => 3,
           "require_tests_green" => true,
           "dry_run" => false,
-          "command_allowlist" => ["bundle exec", "ruby", "npm", "yarn"],
+          "command_allowlist" => ["bundle exec", "ruby", "npm", "yarn", "rubocop", "rake", "make"],
           "allowlist" => ["app/**", "lib/**", "spec/**", "config/**", "db/**", "src/**"],
           "denylist" => [".git/**", "node_modules/**", "log/**", "tmp/**", "dist/**", "build/**", ".env*",
                          "config/credentials*"]

@@ -159,9 +159,9 @@ module Devagent
             }
           },
           handler: :run_command,
-          description: "Run a whitelisted shell command inside the repo.",
+          description: "Run a whitelisted shell command inside the repo (e.g., rubocop, bundle exec rspec, make test).",
           allowed_phases: %i[execution],
-          visible_phases: [],
+          visible_phases: %i[planning],
           depends_on: [],
           side_effects: ["EXECUTES_COMMAND"],
           safety: ["WHITELISTED_ONLY"]

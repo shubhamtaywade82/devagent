@@ -12,8 +12,8 @@ module Devagent
         @colorizer = Colorizer.new(enabled: interactive?)
       end
 
-      def reader
-        @reader ||= Reader.new(input: input, output: output)
+      def reader(history: nil)
+        @reader ||= Reader.new(input: input, output: output, history: history)
       end
 
       def prompt

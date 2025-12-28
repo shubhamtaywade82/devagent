@@ -32,10 +32,16 @@ module Devagent
       context.tracer.event("intent", intent: state.intent, confidence: state.intent_confidence)
 
       if %w[EXPLANATION GENERAL].include?(state.intent)
-        # Use repo context if the question is about the repository
-        use_repo_context = question_about_repo?(task)
-        with_spinner("Indexing") { context.index.build! } if use_repo_context
-        return answer_unactionable(task, state.intent_confidence, use_repo_context: use_repo_context)
+        # Check if the question requires running a command (e.g., "is this rubocop offenses free?")
+        if question_requires_command?(task)
+          # Allow EXPLANATION questions that need commands to go through planning
+          # This enables run_command to be used for checking tools like rubocop, tests, etc.
+        else
+          # Use repo context if the question is about the repository
+          use_repo_context = question_about_repo?(task)
+          with_spinner("Indexing") { context.index.build! } if use_repo_context
+          return answer_unactionable(task, state.intent_confidence, use_repo_context: use_repo_context)
+        end
       end
       return answer_unactionable(task, state.intent_confidence, use_repo_context: false) if state.intent == "REJECT"
 
@@ -515,6 +521,24 @@ module Devagent
       structure_keywords = %w[directory structure file structure folder structure project structure
                               directory tree file tree folder tree directory layout file layout]
       structure_keywords.any? { |keyword| text.include?(keyword) }
+    end
+
+    def question_requires_command?(task)
+      text = task.to_s.strip.downcase
+      # Detect questions that require running commands to answer
+      command_indicators = [
+        # Linting/formatting checks
+        /\b(rubocop|ruby.?lint|style|offenses?|violations?)\b/i,
+        # Test/quality checks
+        /\b(test|spec|rspec|jest|coverage|quality|pass|fail)\b/i,
+        # Build/compile checks
+        /\b(build|compile|make|bundle|install)\b/i,
+        # Status checks that need commands
+        /\b(is|are|does|do|can|will)\s+(this|the|it)\s+(.*?)\s+(free|clean|pass|fail|working|broken)/i,
+        # Direct command requests
+        /\brun\s+(rubocop|test|spec|rspec|bundle|make)/i
+      ]
+      command_indicators.any? { |pattern| text.match?(pattern) }
     end
 
     def get_directory_structure(max_depth: 3)
