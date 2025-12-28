@@ -4,6 +4,8 @@ require "tmpdir"
 require "fileutils"
 
 RSpec.describe Devagent::ToolBus do
+  subject(:tool_bus) { described_class.new(context, registry: registry) }
+
   let(:repo) { Dir.mktmpdir }
   let(:config) do
     {
@@ -11,7 +13,7 @@ RSpec.describe Devagent::ToolBus do
         "allowlist" => ["**/*"],
         "denylist" => [],
         "dry_run" => false,
-        "command_allowlist" => ["bundle", "echo", "ruby"],
+        "command_allowlist" => %w[bundle echo ruby],
         "command_timeout_seconds" => 5,
         "command_max_output_bytes" => 10_000
       }
@@ -28,8 +30,6 @@ RSpec.describe Devagent::ToolBus do
     )
   end
   let(:registry) { Devagent::ToolRegistry.default }
-
-  subject(:tool_bus) { described_class.new(context, registry: registry) }
 
   after do
     FileUtils.remove_entry(repo)
@@ -53,9 +53,9 @@ RSpec.describe Devagent::ToolBus do
     end
 
     it "raises when path is not allowed" do
-      expect {
+      expect do
         tool_bus.write_file("path" => "../outside.txt", "content" => "nope")
-      }.to raise_error(Devagent::Error)
+      end.to raise_error(Devagent::Error)
     end
   end
 
@@ -101,17 +101,17 @@ RSpec.describe Devagent::ToolBus do
     before do
       # Mock run_capture instead of run! since we changed the implementation
       allow(Devagent::Util).to receive(:run_capture).and_return({
-        "stdout" => "80 examples, 0 failures\n",
-        "stderr" => "",
-        "exit_code" => 0,
-        "success" => true
-      })
+                                                                  "stdout" => "80 examples, 0 failures\n",
+                                                                  "stderr" => "",
+                                                                  "exit_code" => 0,
+                                                                  "success" => true
+                                                                })
     end
 
     it "executes provided command" do
       config["auto"]["command_allowlist"] = ["bundle"]
       expect(tool_bus.run_tests("command" => "bundle exec rspec")).to eq(:ok)
-      expect(Devagent::Util).to have_received(:run_capture).with(["bundle", "exec", "rspec"], chdir: repo)
+      expect(Devagent::Util).to have_received(:run_capture).with(%w[bundle exec rspec], chdir: repo)
     end
 
     it "skips when dry run is enabled" do
@@ -133,20 +133,22 @@ RSpec.describe Devagent::ToolBus do
       result = tool_bus.run_command("program" => "echo", "args" => ["hi"])
 
       expect(result).to include("stdout" => "output\n", "stderr" => "", "exit_code" => 0)
-      expect(Devagent::Util).to have_received(:run_capture).with(["echo", "hi"], chdir: repo)
+      expect(Devagent::Util).to have_received(:run_capture).with(%w[echo hi], chdir: repo)
     end
 
     it "skips command execution in dry run" do
       config["auto"]["dry_run"] = true
 
-      expect(tool_bus.run_command("program" => "echo", "args" => ["hi"])).to eq({ "stdout" => "", "stderr" => "", "exit_code" => 0 })
+      expect(tool_bus.run_command("program" => "echo",
+                                  "args" => ["hi"])).to eq({ "stdout" => "",
+                                                             "stderr" => "", "exit_code" => 0 })
       expect(Devagent::Util).not_to have_received(:run_capture)
     end
 
     it "blocks dangerous commands" do
-      expect {
+      expect do
         tool_bus.run_command("program" => "rm", "args" => ["-rf", "/"])
-      }.to raise_error(Devagent::Error, /command not allowed/)
+      end.to raise_error(Devagent::Error, /command not allowed/)
     end
 
     it "truncates excessive command output" do
