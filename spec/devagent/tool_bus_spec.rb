@@ -135,6 +135,30 @@ RSpec.describe Devagent::ToolBus do
       expect(tool_bus.run_command("command" => "echo hi")).to eq({ "stdout" => "", "stderr" => "", "exit_code" => 0 })
       expect(Devagent::Util).not_to have_received(:run_capture)
     end
+
+    it "blocks dangerous commands" do
+      expect {
+        tool_bus.run_command("command" => "rm -rf /")
+      }.to raise_error(Devagent::Error, /command not allowed/)
+    end
+
+    it "truncates excessive command output" do
+      config["auto"]["command_max_output_bytes"] = 10
+      allow(Devagent::Util).to receive(:run_capture).and_return(
+        { "stdout" => "x" * 50, "stderr" => "", "exit_code" => 0, "success" => true }
+      )
+
+      result = tool_bus.run_command("command" => "echo hi")
+      expect(result["stdout"]).to include("... (truncated to 10 bytes)")
+    end
+
+    it "returns a structured timeout result when the command times out" do
+      allow(Timeout).to receive(:timeout).and_raise(Timeout::Error)
+
+      result = tool_bus.run_command("command" => "echo hi")
+      expect(result).to include("exit_code" => 124)
+      expect(result["stderr"]).to include("timed out")
+    end
   end
 
   describe "#delete_file" do

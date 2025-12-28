@@ -38,11 +38,13 @@ RSpec.describe Devagent::Orchestrator do
       Devagent::ToolRegistry,
       tools_for_phase: {
         "fs.read" => double(name: "fs.read", description: "read"),
-        "fs.write" => double(name: "fs.write", description: "write")
+        "fs.write" => double(name: "fs.write", description: "write"),
+        "fs.create" => double(name: "fs.create", description: "create")
       },
       tools: {
         "fs.read" => double(name: "fs.read", description: "read"),
         "fs.write" => double(name: "fs.write", description: "write"),
+        "fs.create" => double(name: "fs.create", description: "create"),
         "fs.write_diff" => double(name: "fs.write_diff", description: "internal")
       },
       fetch: double(allowed_phases: %i[execution])
@@ -99,6 +101,41 @@ RSpec.describe Devagent::Orchestrator do
       expect(tool_bus).to have_received(:invoke).with("type" => "fs.write_diff", "args" => hash_including("path" => "file"))
       expect(tool_bus).to have_received(:run_tests)
       expect(planner).to have_received(:plan).once
+    end
+
+    it "supports creating a new file via fs.create (diff-first)" do
+      create_plan = Devagent::Plan.new(
+        plan_id: "create-plan",
+        goal: "Create a new file",
+        assumptions: [],
+        steps: [
+          {
+            "step_id" => 1,
+            "action" => "fs.create",
+            "path" => "spec/tmp_created.rb",
+            "command" => nil,
+            "content" => "puts 'hi'\n",
+            "reason" => "Create a simple Ruby script",
+            "depends_on" => [0]
+          }
+        ],
+        success_criteria: ["file created"],
+        rollback_strategy: "revert",
+        confidence: 0.8
+      )
+
+      allow(planner).to receive(:plan).and_return(create_plan)
+      allow(Devagent::DecisionEngine).to receive(:new).and_return(
+        instance_double(Devagent::DecisionEngine, decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 })
+      )
+
+      orchestrator = described_class.new(context, output: output)
+      orchestrator.run("create file")
+
+      expect(tool_bus).to have_received(:invoke).with(
+        "type" => "fs.write_diff",
+        "args" => hash_including("path" => "spec/tmp_created.rb")
+      )
     end
 
     it "stops early when plan has no actions" do
