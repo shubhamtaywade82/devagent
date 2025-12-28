@@ -103,6 +103,39 @@ openai:
   api_key: "ollama"
 ```
 
+### Ollama host resolution (recommended)
+
+Devagent resolves the Ollama host without depending on the current working directory:
+
+1. **CLI flag**: `--ollama-host http://...`
+2. **Environment variable**: `OLLAMA_HOST=http://...`
+3. **User config**: `~/.devagent.yml` (`ollama.host`)
+4. **Default**: `http://localhost:11434`
+
+Examples:
+
+```bash
+export OLLAMA_HOST=http://192.168.1.14:11434
+devagent --provider ollama
+
+devagent --provider ollama --ollama-host http://localhost:11434
+```
+
+User config (`~/.devagent.yml`):
+
+```yaml
+ollama:
+  host: http://192.168.1.14:11434
+  timeout: 60
+```
+
+Inspect resolved config:
+
+```bash
+devagent config
+devagent diag
+```
+
 ---
 
 ## How It Works
@@ -163,11 +196,12 @@ SUCCESS: Task completed
 
 DevAgent can use these tools:
 
-- **fs_read** - Read files
-- **fs_write** - Write files (with diff generation)
-- **fs_delete** - Delete files
-- **run_tests** - Run test suite
-- **run_command** - Execute shell commands
+- **fs.read** - Read files
+- **fs.write** - Propose edits (controller applies diff)
+- **fs.create** - Create new files (controller applies diff)
+- **fs.delete** - Delete files
+- **exec.run** - Execute allowlisted shell commands
+- **diagnostics.error_summary** - Summarize stderr into likely root cause
 
 ---
 

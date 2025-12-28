@@ -26,6 +26,41 @@ devagent
 OPENAI_API_KEY=sk-... devagent --provider openai --model gpt-4o-mini
 ```
 
+### Ollama host configuration (directory-independent)
+
+Devagent resolves the Ollama host in this priority order:
+
+1. **CLI flag**: `--ollama-host`
+2. **Environment variable**: `OLLAMA_HOST`
+3. **User config file**: `~/.devagent.yml`
+4. **Default**: `http://localhost:11434`
+
+Examples:
+
+```bash
+# One-off override
+devagent start --provider ollama --ollama-host http://192.168.1.14:11434
+
+# Environment variable (recommended for most users)
+export OLLAMA_HOST=http://192.168.1.14:11434
+devagent start --provider ollama
+```
+
+User config (`~/.devagent.yml`):
+
+```yaml
+ollama:
+  host: http://192.168.1.14:11434
+  timeout: 60
+```
+
+Inspect resolved configuration:
+
+```bash
+devagent config
+devagent diag
+```
+
 ### Configuration (`.devagent.yml`)
 
 ```yaml
@@ -47,6 +82,7 @@ openai:
     num_ctx: 2048
 ollama:
   host: "http://localhost:11434"
+  timeout: 300
   params:
     temperature: 0.2
     top_p: 0.95
@@ -86,6 +122,8 @@ memory:
 | ------------------------------------------------ | --------------------------------------------------------------------- |
 | `devagent`                                       | Launch the interactive REPL (default task).                           |
 | `devagent --provider openai --model gpt-4o-mini` | Override provider/model for a session.                                |
+| `devagent start --ollama-host http://...`        | Override Ollama host for a session.                                   |
+| `devagent config`                                | Print resolved configuration (including Ollama host + source).        |
 | `devagent diag`                                  | Print provider, model, embedding backend, and key status diagnostics. |
 | `devagent test`                                  | Run connectivity diagnostics.                                         |
 
