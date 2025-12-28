@@ -27,33 +27,35 @@ module Devagent
       context.session_memory.append("user", task)
       state = AgentState.initial(goal: task)
 
+      # Security: Handle "list all files" requests BEFORE intent classification
+      # This prevents misclassified intents from bypassing the security check
+      rejection_result = should_reject_file_listing_request?(task)
+      if rejection_result == true
+        requested_path = extract_path_from_listing_request(task)
+
+        # If no path specified (list all files), show clarification but also list allowed directories
+        if requested_path.nil?
+          unless quiet?
+            streamer.say("Clarification needed: Please specify a path. Listing all files in the repository is not allowed for security reasons.", level: :warn)
+            streamer.say("Showing files from allowed directories only:")
+          end
+          # List files from all allowed directories
+          return answer_with_allowed_directories(task)
+        else
+          # Path specified but not allowed
+          unless quiet?
+            streamer.say("Access denied: The path '#{requested_path}' is not in the allowlist. Please specify a path that is allowed in your configuration.", level: :warn)
+          end
+          return
+        end
+      end
+
       intent = with_spinner("Classifying") { IntentClassifier.new(context).classify(task) }
       state.intent = intent["intent"]
       state.intent_confidence = intent["confidence"].to_f
       context.tracer.event("intent", intent: state.intent, confidence: state.intent_confidence)
 
       if %w[EXPLANATION GENERAL].include?(state.intent)
-        # Security: Handle "list all files" requests
-        rejection_result = should_reject_file_listing_request?(task)
-        if rejection_result == true
-          requested_path = extract_path_from_listing_request(task)
-
-          # If no path specified (list all files), show clarification but also list allowed directories
-          if requested_path.nil?
-            unless quiet?
-              streamer.say("Clarification needed: Please specify a path. Listing all files in the repository is not allowed for security reasons.", level: :warn)
-              streamer.say("Showing files from allowed directories only:")
-            end
-            # List files from all allowed directories
-            return answer_with_allowed_directories(task)
-          else
-            # Path specified but not allowed
-            unless quiet?
-              streamer.say("Access denied: The path '#{requested_path}' is not in the allowlist. Please specify a path that is allowed in your configuration.", level: :warn)
-            end
-            return
-          end
-        end
 
         # Check if the question requires running a command (e.g., "is this rubocop offenses free?")
         if question_requires_command?(task)
