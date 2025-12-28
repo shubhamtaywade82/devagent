@@ -33,6 +33,28 @@ module Devagent
       context.tracer.event("intent", intent: state.intent, confidence: state.intent_confidence)
 
       if %w[EXPLANATION GENERAL].include?(state.intent)
+        # Security: Handle "list all files" requests
+        rejection_result = should_reject_file_listing_request?(task)
+        if rejection_result == true
+          requested_path = extract_path_from_listing_request(task)
+
+          # If no path specified (list all files), show clarification but also list allowed directories
+          if requested_path.nil?
+            unless quiet?
+              streamer.say("Clarification needed: Please specify a path. Listing all files in the repository is not allowed for security reasons.", level: :warn)
+              streamer.say("Showing files from allowed directories only:")
+            end
+            # List files from all allowed directories
+            return answer_with_allowed_directories(task)
+          else
+            # Path specified but not allowed
+            unless quiet?
+              streamer.say("Access denied: The path '#{requested_path}' is not in the allowlist. Please specify a path that is allowed in your configuration.", level: :warn)
+            end
+            return
+          end
+        end
+
         # Check if the question requires running a command (e.g., "is this rubocop offenses free?")
         if question_requires_command?(task)
           # Allow EXPLANATION questions that need commands to go through planning
@@ -391,11 +413,59 @@ module Devagent
       context.config.dig("auto", "require_tests_green") != false
     end
 
+    # List files from all allowed directories when user requests "list all files"
+    def answer_with_allowed_directories(_task)
+      allowlist = Array(context.config.dig("auto", "allowlist"))
+
+      # Extract directory paths from allowlist patterns (e.g., "lib/**" -> "lib")
+      # Skip patterns like "README*" that are file patterns, not directories
+      allowed_dirs = allowlist
+        .map { |pattern| pattern.gsub(/\*\*?$/, "").chomp("/") }
+        .reject { |dir| dir.empty? || dir.include?("*") || dir.include?("?") }
+        .select { |dir| 
+          full_path = File.join(context.repo_path, dir)
+          # Check if it's a directory and if files in it would be allowed
+          Dir.exist?(full_path) && context.tool_bus.safety.allowed?("#{dir}/test.rb")
+        }
+        .sort
+
+      if allowed_dirs.empty?
+        streamer.say("No allowed directories found in the repository.", markdown: true)
+        return
+      end
+
+      # Build directory structure for each allowed directory
+      structures = allowed_dirs.map do |dir|
+        structure = get_directory_structure(path: dir, max_depth: 2)
+        structure.empty? ? nil : "#{dir}/\n#{structure}"
+      end.compact
+
+      if structures.empty?
+        streamer.say("No files found in allowed directories.", markdown: true)
+        return
+      end
+
+      # Show the directory structures
+      streamer.say("Files from allowed directories:\n\n#{structures.join("\n\n")}", markdown: true)
+    end
+
     # When planning yields no actions, answer the user's question directly using
     # the developer model and light repository context.
     def answer_unactionable(task, confidence, use_repo_context: true)
+      # Security: Don't process "list all files" requests - these should have been rejected earlier
+      if should_reject_file_listing_request?(task)
+        unless quiet?
+          streamer.say("I cannot list all files in the repository for security reasons. Please specify a specific path or directory you'd like to explore.")
+        end
+        return
+      end
+
       streamer.say("Answer:") unless quiet?
       prompt = build_answer_prompt(task, use_repo_context: use_repo_context)
+
+      # If prompt is empty (e.g., rejected request), don't query the LLM
+      return if prompt.empty?
+
       answer = with_spinner("Answering") do
         context.query(
           role: :developer,
@@ -436,6 +506,10 @@ module Devagent
     end
 
     def build_answer_prompt(task, use_repo_context:)
+      # Security: Don't allow "list all files" requests - these should have been rejected earlier
+      # But add a safety check here too to prevent directory traversal
+      return "" if should_reject_file_listing_request?(task)
+
       # For repository description questions, try to read README files directly
       # This ensures we get documentation even if semantic search doesn't find it
       readme_content = if question_needs_file_access?(task) && question_about_repo?(task)
@@ -453,8 +527,22 @@ module Devagent
                   end
 
       # Include directory structure if the question is about directory structure
-      dir_structure = if question_about_directory_structure?(task)
-                        get_directory_structure
+      # But NOT for "list all files" requests (security)
+      # If a specific allowed path is mentioned, list only that path
+      dir_structure = if question_about_directory_structure?(task) && !should_reject_file_listing_request?(task)
+                        requested_path = extract_path_from_listing_request(task)
+                        if requested_path
+                          # List files from the specific allowed path
+                          full_path = File.join(context.repo_path, requested_path)
+                          if Dir.exist?(full_path) && context.tool_bus.safety.allowed?(requested_path)
+                            get_directory_structure(path: requested_path)
+                          else
+                            ""
+                          end
+                        else
+                          # General directory structure question (not a listing request)
+                          get_directory_structure
+                        end
                       else
                         ""
                       end
@@ -743,13 +831,19 @@ module Devagent
 
     def question_needs_file_access?(task)
       text = task.to_s.strip.downcase
+      original_text = task.to_s.strip
+
+      # Security: Don't allow "list all files" requests to go through file access path
+      return false if should_reject_file_listing_request?(task)
+
       # Questions that might need reading files (documentation, source files, config files, etc.)
       # The LLM will decide which specific files to read based on the question and repository context
       file_access_indicators = [
         "what is this", "what is the", "what's this", "what's the",
         "about", "description", "purpose", "what does", "what do",
         "explain this repo", "explain this repository", "explain this project",
-        "read", "show me", "what files", "what's in", "list files"
+        "read", "show me", "what files", "what's in"
+        # Note: "list files" removed - use should_reject_file_listing_request? instead
       ]
 
       # Questions about specific classes/components in the repository need file access
@@ -760,7 +854,7 @@ module Devagent
       ]
       mentions_code_component = code_component_indicators.any? { |keyword| text.include?(keyword) } &&
                                 (text.match?(/\b(class|module|function|method|component|system|registry|tool|agent|planner|orchestrator)\b/i) ||
-                                 text.match?(/\b[A-Z][a-zA-Z]+\b/)) # Capitalized words likely refer to classes
+                                 original_text.match?(/\b[A-Z][a-zA-Z]+\b/)) # Capitalized words likely refer to classes - check original text
 
       general_file_access = file_access_indicators.any? { |keyword| text.include?(keyword) } &&
                             question_about_repo?(task)
@@ -768,8 +862,76 @@ module Devagent
       general_file_access || mentions_code_component
     end
 
+    def extract_path_from_listing_request(task)
+      original_text = task.to_s.strip
+
+      # First check if it's a generic "this repository/repo/project/codebase" request
+      # These should be rejected - they mean "all files"
+      generic_pattern = /\b(in|of|from)\s+(this\s+)?(repo|repository|project|codebase)\b/i
+      return nil if original_text.match?(generic_pattern)
+
+      # Look for path-like patterns: "in lib/", "in docs/", "in app/", etc.
+      # But exclude "this" followed by repo/repository/project/codebase
+      path_pattern = /\b(in|of|from)\s+([a-zA-Z0-9_\-\.\/]+(?:\/[a-zA-Z0-9_\-\.\/]*)?)\b/i
+      path_match = original_text.match(path_pattern)
+      return nil if path_match.nil?
+
+      requested_path = path_match[2].strip
+      # Double-check: if path is just "this" or starts with "this ", it's likely "this repository"
+      return nil if requested_path == "this" || requested_path.start_with?("this ")
+
+      # If path is "repo/repository/project/codebase" (without "this"), also reject
+      return nil if requested_path.match?(/^(repo|repository|project|codebase)$/i)
+
+      requested_path.chomp("/")
+    end
+
+    def should_reject_file_listing_request?(task)
+      text = task.to_s.strip.downcase
+
+      # Check if this is a file listing request
+      is_listing_request = text.match?(/\b(list|show)\s+(all\s+)?files?\s+(in|of|from)\b/i)
+      return false unless is_listing_request
+
+      # Extract the path
+      requested_path = extract_path_from_listing_request(task)
+
+      # If no specific path mentioned, reject it
+      return true if requested_path.nil?
+
+      # Check if the path is allowed using Safety
+      safety = context.tool_bus.safety
+
+      # Normalize the path: ensure it doesn't have a trailing slash for consistency
+      normalized_path = requested_path.chomp("/")
+
+      # Test with various file paths in that directory to see if the directory is allowed
+      # The allowlist uses glob patterns like "docs/**" or "lib/**", which match files under
+      # that directory, not the directory name itself. So we test with file paths.
+      test_paths = [
+        "#{normalized_path}/README.md", # Common file
+        "#{normalized_path}/test.rb",    # Example Ruby file
+        "#{normalized_path}/test.txt",   # Example text file
+        "#{normalized_path}/index.js"    # Example JS file
+      ]
+
+      # If any test path is allowed, permit the listing (return false = don't reject)
+      # Note: We don't test the directory name itself because glob patterns like "docs/**"
+      # match files under docs/, not "docs" itself
+      is_allowed = test_paths.any? { |test_path| safety.allowed?(test_path) }
+
+      # Return true to reject if NOT allowed, false to allow if it IS allowed
+      !is_allowed
+    rescue StandardError
+      # If anything goes wrong, default to rejecting for security
+      true
+    end
+
     def question_about_directory_structure?(task)
       text = task.to_s.strip.downcase
+      # Security: Don't allow "list all files" - this should be rejected or require clarification
+      return false if should_reject_file_listing_request?(task)
+
       structure_keywords = %w[directory structure file structure folder structure project structure
                               directory tree file tree folder tree directory layout file layout]
       structure_keywords.any? { |keyword| text.include?(keyword) }
@@ -843,10 +1005,23 @@ module Devagent
       )
     end
 
-    def get_directory_structure(max_depth: 3)
+    def get_directory_structure(path: nil, max_depth: 3)
       return "" unless context.repo_path && Dir.exist?(context.repo_path)
 
-      build_tree(context.repo_path, "", max_depth: max_depth)
+      # If a specific path is requested, use that; otherwise use repo root
+      target_path = if path
+                      full_path = File.join(context.repo_path, path)
+                      # Validate the path is allowed and exists
+                      # Check with a test file path since glob patterns like "lib/**" match files, not directories
+                      return "" unless Dir.exist?(full_path)
+                      test_file_path = "#{path}/test.rb"
+                      return "" unless context.tool_bus.safety.allowed?(test_file_path)
+                      full_path
+                    else
+                      context.repo_path
+                    end
+
+      build_tree(target_path, "", max_depth: max_depth)
     end
 
     def build_tree(dir_path, prefix, max_depth:, current_depth: 0)
