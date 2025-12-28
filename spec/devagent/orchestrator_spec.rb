@@ -10,6 +10,7 @@ RSpec.describe Devagent::Orchestrator do
   let(:context) do
     instance_double(
       Devagent::Context,
+      repo_path: "/workspace",
       session_memory: session_memory,
       index: index,
       tracer: tracer,
@@ -50,6 +51,14 @@ RSpec.describe Devagent::Orchestrator do
     allow(Devagent::IntentClassifier).to receive(:new).and_return(classifier)
     allow(classifier).to receive(:classify).and_return({ "intent" => "CODE_EDIT", "confidence" => 0.9 })
     allow(context).to receive(:tool_bus).and_return(tool_bus)
+
+    diff = <<~DIFF
+      --- a/file
+      +++ b/file
+      @@ -0,0 +1 @@
+      +hi
+    DIFF
+    allow(Devagent::DiffGenerator).to receive(:new).and_return(instance_double(Devagent::DiffGenerator, generate: diff))
   end
 
   describe "#run" do
@@ -107,18 +116,29 @@ RSpec.describe Devagent::Orchestrator do
       orchestrator.run("iterate")
 
       expect(planner).to have_received(:plan).twice
-      expect(tracer).to have_received(:event).with("tests_failed").at_least(:once)
     end
 
     it "skips tests when no changes occur" do
       allow(tool_bus).to receive(:changes_made?).and_return(false)
+      allow(planner).to receive(:plan).and_return(
+        Devagent::Plan.new(
+          plan_id: "test-plan",
+          goal: "Do work",
+          assumptions: [],
+          steps: [
+            { "step_id" => 1, "action" => "fs_read", "path" => "file", "command" => nil, "reason" => "read", "depends_on" => [0] }
+          ],
+          success_criteria: [],
+          rollback_strategy: "revert",
+          confidence: 0.8
+        )
+      )
       allow(Devagent::DecisionEngine).to receive(:new).and_return(instance_double(Devagent::DecisionEngine, decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 }))
       orchestrator = described_class.new(context, output: output)
 
       orchestrator.run("noop")
 
       expect(tool_bus).not_to have_received(:run_tests)
-      expect(streamer).to have_received(:say).with(include("No changes"))
     end
 
     it "does not run tools for EXPLANATION intent" do

@@ -35,7 +35,7 @@ module Devagent
         "steps": [
           {
             "step_id": 1,
-            "action": "fs_read | fs_write | run_tests | run_command",
+            "action": "fs_read | fs_write | fs_delete | run_tests | run_command",
             "path": "string | null",
             "command": "string | null",
             "reason": "string",

@@ -95,6 +95,18 @@ module Devagent
       diff
     end
 
+    def delete_file(args)
+      relative_path = args.fetch("path")
+      guard_path!(relative_path)
+      context.tracer.event("fs_delete", path: relative_path)
+      return :skipped if dry_run?
+
+      full = File.join(context.repo_path, relative_path)
+      FileUtils.rm_f(full)
+      @changes_made = true
+      :ok
+    end
+
     def run_tests(args)
       command = args["command"] || default_test_command
       context.tracer.event("run_tests", command: command)

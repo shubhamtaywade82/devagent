@@ -150,6 +150,10 @@ module Devagent
         original = context.tool_bus.read_file("path" => path.to_s)
         diff = DiffGenerator.new(context).generate(path: path.to_s, original: original, goal: plan.goal.to_s, reason: step["reason"].to_s)
         tool_invoke_with_policy(state, "fs_write_diff", "path" => path.to_s, "diff" => diff)
+      when "fs_delete"
+        raise Error, "path required" if path.to_s.empty?
+        ensure_read_same_path!(state, path)
+        tool_invoke_with_policy(state, "fs_delete", "path" => path.to_s)
       when "run_tests"
         tool_invoke_with_policy(state, "run_tests", "command" => command)
       when "run_command"

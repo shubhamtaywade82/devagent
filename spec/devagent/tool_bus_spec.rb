@@ -130,4 +130,25 @@ RSpec.describe Devagent::ToolBus do
       expect(Devagent::Util).not_to have_received(:run!)
     end
   end
+
+  describe "#delete_file" do
+    it "deletes a file inside the repo and marks changes" do
+      FileUtils.mkdir_p(File.join(repo, "lib"))
+      File.write(File.join(repo, "lib/to_delete.rb"), "puts 'bye'\n")
+
+      expect(tool_bus.delete_file("path" => "lib/to_delete.rb")).to eq(:ok)
+      expect(File.exist?(File.join(repo, "lib/to_delete.rb"))).to be(false)
+      expect(tool_bus).to be_changes_made
+    end
+
+    it "respects dry run mode" do
+      config["auto"]["dry_run"] = true
+      FileUtils.mkdir_p(File.join(repo, "lib"))
+      File.write(File.join(repo, "lib/dry_delete.rb"), "puts 'bye'\n")
+
+      expect(tool_bus.delete_file("path" => "lib/dry_delete.rb")).to eq(:skipped)
+      expect(File.exist?(File.join(repo, "lib/dry_delete.rb"))).to be(true)
+      expect(tool_bus).not_to be_changes_made
+    end
+  end
 end

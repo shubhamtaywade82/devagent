@@ -71,7 +71,7 @@ RSpec.describe Devagent::Planner do
     expect(plan.goal).to eq("Ship feature")
     expect(plan.steps.length).to eq(2)
     expect(plan.success_criteria).to include("README updated")
-    expect(streamer).to have_received(:with_stream).with(:planner)
+    expect(streamer).to have_received(:with_stream).with(:planner, hash_including(markdown: false, silent: true))
     expect(tokens).to include("{")
   end
 
@@ -88,7 +88,7 @@ RSpec.describe Devagent::Planner do
     end
 
     plan = planner.plan("Ship feature")
-    expect(plan.actions).not_to be_empty
+    expect(plan.steps).not_to be_empty
     expect(attempts).to eq(2)
   end
 end

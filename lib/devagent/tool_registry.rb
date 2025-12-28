@@ -82,6 +82,23 @@ module Devagent
           safety: ["NO_WRITE_OUTSIDE_PROJECT"]
         ),
         Tool.new(
+          name: "fs_delete",
+          schema: {
+            "type" => "object",
+            "required" => ["path"],
+            "properties" => {
+              "path" => { "type" => "string" }
+            }
+          },
+          handler: :delete_file,
+          description: "Delete a file inside the repo (requires prior read).",
+          allowed_phases: %i[execution],
+          visible_phases: %i[planning],
+          depends_on: ["fs_read"],
+          side_effects: ["MODIFIES_FS"],
+          safety: ["NO_WRITE_OUTSIDE_PROJECT"]
+        ),
+        Tool.new(
           name: "fs_write",
           schema: {
             "type" => "object",
