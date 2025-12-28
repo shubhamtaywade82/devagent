@@ -38,6 +38,9 @@ module Devagent
               "action" => { "type" => "string" },
               "path" => { "type" => ["string", "null"] },
               "command" => { "type" => ["string", "null"] },
+              "content" => { "type" => ["string", "null"] },
+              "accepted_exit_codes" => { "type" => ["array", "null"], "items" => { "type" => "integer" } },
+              "allow_failure" => { "type" => ["boolean", "null"] },
               "reason" => { "type" => "string" },
               "depends_on" => { "type" => "array", "items" => { "type" => "integer", "minimum" => 0 } }
             }
@@ -102,6 +105,9 @@ module Devagent
               "action" => step["action"],
               "path" => step["path"],
               "command" => step["command"],
+              "content" => step["content"],
+              "accepted_exit_codes" => step["accepted_exit_codes"],
+              "allow_failure" => step["allow_failure"],
               "reason" => step["reason"],
               "depends_on" => Array(step["depends_on"])
             }
@@ -230,9 +236,10 @@ module Devagent
                       context.tool_registry.tools.values
                     end
 
-      tools = tool_values.map do |tool|
-        "- #{tool.name}: #{tool.description}"
-      end.join("\n")
+      tool_contracts = tool_values.map do |tool|
+        tool.respond_to?(:to_contract_hash) ? tool.to_contract_hash : { "name" => tool.name, "description" => tool.description }
+      end
+      tools_json = JSON.pretty_generate(tool_contracts)
 
       feedback_section = if feedback && !Array(feedback).empty?
                            "Known issues from reviewer:\n#{Array(feedback).join("\n")}"
@@ -251,8 +258,11 @@ module Devagent
 
         #{plugin_guidance}
 
-        Available tools:
-        #{tools}
+        You have access to the following tools. Each tool MUST be used strictly according to its contract.
+        Never invent tools. Never skip dependencies. Never assume side effects.
+
+        Tools (JSON):
+        #{tools_json}
 
         Recent conversation:
         #{history}

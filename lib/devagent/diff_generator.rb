@@ -9,12 +9,15 @@ module Devagent
       @context = context
     end
 
-    def generate(path:, original:, goal:, reason:)
+    def generate(path:, original:, goal:, reason:, file_exists:)
       prompt = <<~PROMPT
         #{Prompts::DIFF_SYSTEM}
 
         Path:
         #{path}
+
+        File exists:
+        #{file_exists ? "true" : "false"}
 
         Goal:
         #{goal}

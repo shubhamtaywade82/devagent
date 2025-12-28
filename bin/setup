@@ -1,8 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 IFS=$'\n\t'
-set -vx
 
-bundle install
+echo "==> Devagent repo setup"
 
-# Do any other automated setup that you need to do here
+if ! command -v ruby >/dev/null 2>&1; then
+  echo "ERROR: ruby not found."
+  echo "On Ubuntu/Debian, install: sudo apt-get install -y ruby-full ruby-dev build-essential git libsqlite3-dev libyaml-dev"
+  exit 1
+fi
+
+LOCKFILE="Gemfile.lock"
+BUNDLER_VERSION=""
+if [[ -f "$LOCKFILE" ]]; then
+  BUNDLER_VERSION="$(awk 'p{print;exit} $0 ~ /^BUNDLED WITH$/{p=1}' "$LOCKFILE" | tr -d '[:space:]' || true)"
+fi
+
+if [[ -n "${BUNDLER_VERSION}" ]]; then
+  echo "==> Ensuring Bundler ${BUNDLER_VERSION} (from Gemfile.lock)"
+  gem list -i bundler -v "${BUNDLER_VERSION}" >/dev/null 2>&1 || gem install bundler -v "${BUNDLER_VERSION}" -N
+  BUNDLE_CMD=(bundle _"${BUNDLER_VERSION}"_)
+else
+  echo "==> Gemfile.lock has no BUNDLED WITH; using default bundler"
+  BUNDLE_CMD=(bundle)
+fi
+
+echo "==> Installing gems into ./vendor/bundle (repo-local; gitignored)"
+"${BUNDLE_CMD[@]}" config set --local path vendor/bundle
+"${BUNDLE_CMD[@]}" install
+
+echo "==> Running test suite"
+"${BUNDLE_CMD[@]}" exec rspec

@@ -15,6 +15,7 @@ module Devagent
     class_option :developer_model, type: :string, desc: "Developer model override"
     class_option :reviewer_model, type: :string, desc: "Reviewer/tester model override"
     class_option :embed_model, type: :string, desc: "Embedding model override"
+    class_option :ollama_host, type: :string, desc: "Ollama server URL (overrides ENV and ~/.devagent.yml)"
 
     def self.exit_on_failure?
       true
@@ -30,8 +31,13 @@ module Devagent
     desc "diag", "Print provider/model diagnostics"
     def diag
       ctx = build_context
+      host, host_source = Devagent::Config.resolve_ollama_host(cli_host: options[:ollama_host])
       info = {
         provider: ctx.resolved_provider,
+        ollama: {
+          host: host,
+          host_source: Devagent::Config.format_source(host_source)
+        },
         models: {
           default: ctx.model_for(:default),
           planner: ctx.model_for(:planner),
@@ -43,10 +49,23 @@ module Devagent
       }
       say "Devagent diagnostics"
       say "  provider     : #{info[:provider]}"
+      say "  ollama host  : #{info[:ollama][:host]} (#{info[:ollama][:host_source]})"
       say "  models       : #{info[:models]}"
       say "  embedding    : #{info[:embedding]}"
       say "  OPENAI_API_KEY: #{info[:openai_key]}"
       info
+    end
+
+    desc "config", "Print resolved Devagent configuration"
+    def config
+      host, host_source = Devagent::Config.resolve_ollama_host(cli_host: options[:ollama_host])
+      timeout, _timeout_source = Devagent::Config.resolve_ollama_timeout_seconds
+
+      say "Devagent configuration:"
+      say "  Ollama host   : #{host}"
+      say "  Host source   : #{Devagent::Config.format_source(host_source)}"
+      say "  Ollama timeout: #{timeout}s"
+      say "  User config   : #{Devagent::Config::CONFIG_PATH}"
     end
 
     desc "test", "Run diagnostics to verify configuration and connectivity"
@@ -70,6 +89,7 @@ module Devagent
     def context_overrides
       overrides = {}
       overrides["provider"] = options[:provider] if options[:provider]
+      overrides["ollama"] = { "host" => options[:ollama_host] } if options[:ollama_host]
 
       # If only --model is provided (without role-specific models), cascade it to all roles
       if options[:model] && !options[:planner_model] && !options[:developer_model] && !options[:reviewer_model]

@@ -189,9 +189,9 @@ class SimpleDevAgentTest
       registry = Devagent::ToolRegistry.default
 
       # Test tool registration and validation
-      write_file_tool = registry.validate!("fs_write", { "path" => "test.rb", "content" => "test" })
+      read_tool = registry.validate!("fs.read", { "path" => "README.md" })
 
-      if write_file_tool && write_file_tool.handler == :write_file
+      if read_tool && read_tool.handler == :read_file
         @results[:tool_registry] = { status: "PASS" }
         puts "✅ Tool registry working correctly"
         puts "   Tool validation: ✅"

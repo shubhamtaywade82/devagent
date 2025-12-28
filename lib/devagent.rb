@@ -1,12 +1,6 @@
 # frozen_string_literal: true
 
 require "zeitwerk"
-begin
-  require "dotenv"
-  Dotenv.load
-rescue LoadError
-  # dotenv is optional; ignore if not installed
-end
 require_relative "devagent/version"
 
 # Devagent is the primary namespace for the autonomous local agent gem.

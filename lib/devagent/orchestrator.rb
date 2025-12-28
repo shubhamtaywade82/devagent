@@ -9,6 +9,7 @@ require_relative "intent_classifier"
 require_relative "diff_generator"
 require_relative "decision_engine"
 require_relative "success_verifier"
+require "shellwords"
 
 module Devagent
   # Orchestrator coordinates planning, execution, and testing loops.
@@ -53,11 +54,16 @@ module Devagent
       until %i[done halted].include?(state.phase)
         case state.phase
         when :planning
-          visible_tools = if context.tool_registry.respond_to?(:tools_for_phase)
+          visible_tools = if context.tool_registry.respond_to?(:visible_tools_for_phase)
+                            context.tool_registry.visible_tools_for_phase(:planning)
+                          elsif context.tool_registry.respond_to?(:tools_for_phase)
                             context.tool_registry.tools_for_phase(:planning).values
                           else
                             context.tool_registry.tools.values
                           end
+          unless context.config.dig("auto", "enable_git_tools") == true
+            visible_tools = Array(visible_tools).reject { |t| t.respond_to?(:category) && t.category.to_s == "git" }
+          end
 
           plan = with_spinner("Planning") do
             planner.plan(task, controller_feedback: controller_feedback(state), visible_tools: visible_tools)
@@ -156,21 +162,7 @@ module Devagent
         raise Error, "step #{step["step_id"]} failed" unless result["success"]
       rescue StandardError => e
         error_msg = e.message
-        # Provide more helpful error messages for command failures
-        if error_msg.include?("Command failed") && step["action"] == "run_command"
-          # Extract the actual error from stderr if available
-          if error_msg.include?("STDERR:")
-            stderr_part = error_msg.split("STDERR:").last.strip
-            streamer.say("Step #{step["step_id"]} failed: Command error", level: :error)
-            streamer.say("Command: #{step["command"]}", level: :error)
-            streamer.say("Error: #{stderr_part}", level: :error)
-            streamer.say("Note: Commands run in: #{context.repo_path}", level: :info)
-          else
-            streamer.say("Step #{step["step_id"]} failed: #{error_msg}", level: :error)
-          end
-        else
-          streamer.say("Step #{step["step_id"]} failed: #{error_msg}", level: :error)
-        end
+        streamer.say("Step #{step["step_id"]} failed: #{error_msg}", level: :error)
         state.record_error(signature: "step_failed:#{step["step_id"]}", message: error_msg)
         state.step_results[step["step_id"]] = { "success" => false, "error" => error_msg }
         state.record_observation({ "type" => "STEP_FAILED", "step_id" => step["step_id"], "status" => "FAIL",
@@ -192,30 +184,56 @@ module Devagent
       action = step["action"].to_s
       path = step["path"]
       command = step["command"]
+      content = step["content"]
 
       case action
-      when "fs_read"
-        tool_invoke_with_policy(state, "fs_read", "path" => path)
-      when "fs_write"
+      when "fs.read", "fs_read"
+        tool_invoke_with_policy(state, "fs.read", "path" => path)
+      when "fs.create"
+        raise Error, "path required" if path.to_s.empty?
+        raise Error, "file already exists: #{path}" if File.exist?(File.join(context.repo_path, path.to_s))
+
+        raise Error, "content required" if content.to_s.empty?
+        # Deterministic add-file diff generation (do not rely on model formatting).
+        diff = build_add_file_diff(path: path.to_s, content: content.to_s)
+
+        tool_invoke_with_policy(state, "fs.write_diff", "path" => path.to_s, "diff" => diff)
+      when "fs.write", "fs_write"
         # diff-first write: read must have happened, then generate diff, then apply diff.
         raise Error, "path required" if path.to_s.empty?
 
         ensure_read_same_path!(state, path)
-        original = context.tool_bus.read_file("path" => path.to_s)
-        diff = DiffGenerator.new(context).generate(path: path.to_s, original: original, goal: plan.goal.to_s,
-                                                   reason: step["reason"].to_s)
-        tool_invoke_with_policy(state, "fs_write_diff", "path" => path.to_s, "diff" => diff)
-      when "fs_delete"
+        original = context.tool_bus.read_file("path" => path.to_s).fetch("content")
+        diff = DiffGenerator.new(context).generate(
+          path: path.to_s,
+          original: original,
+          goal: plan.goal.to_s,
+          reason: step["reason"].to_s,
+          file_exists: true
+        )
+        tool_invoke_with_policy(state, "fs.write_diff", "path" => path.to_s, "diff" => diff)
+      when "fs.delete", "fs_delete"
         raise Error, "path required" if path.to_s.empty?
 
         ensure_read_same_path!(state, path)
-        tool_invoke_with_policy(state, "fs_delete", "path" => path.to_s)
-      when "check_command_help"
-        tool_invoke_with_policy(state, "check_command_help", "command" => command)
-      when "run_tests"
-        tool_invoke_with_policy(state, "run_tests", "command" => command)
-      when "run_command"
-        tool_invoke_with_policy(state, "run_command", "command" => command)
+        tool_invoke_with_policy(state, "fs.delete", "path" => path.to_s)
+      when "exec.run", "run_command", "run_tests"
+        # Back-compat: string commands are parsed into program+args.
+        # exec.run itself only accepts structured invocations.
+        cmd = command.to_s
+        cmd = "bundle exec rspec" if action == "run_tests" && cmd.strip.empty?
+        tokens = Shellwords.split(cmd)
+        raise Error, "command required" if tokens.empty?
+        tool_invoke_with_policy(
+          state,
+          "exec.run",
+          "program" => tokens.first,
+          "args" => tokens.drop(1),
+          "accepted_exit_codes" => step["accepted_exit_codes"],
+          "allow_failure" => step["allow_failure"]
+        )
+      when "diagnostics.error_summary"
+        tool_invoke_with_policy(state, "diagnostics.error_summary", "stderr" => command.to_s)
       else
         raise Error, "Unknown step action #{action}"
       end
@@ -234,47 +252,43 @@ module Devagent
       result = context.tool_bus.invoke("type" => tool_name, "args" => args)
       record_artifacts(state, tool_name, args, result)
 
-      # Handle structured results from run_command (hash with stdout/stderr/exit_code)
-      if result.is_a?(Hash) && result.key?("stdout")
-        { "success" => result["success"], "artifact" => result }
-      else
-        { "success" => true, "artifact" => result }
-      end
+      success =
+        if tool_name == "exec.run"
+          exit_code = result.is_a?(Hash) ? result["exit_code"].to_i : 0
+          accepted = Array(args["accepted_exit_codes"]).map(&:to_i)
+          allow_failure = args["allow_failure"] == true
+          exit_code == 0 || allow_failure || accepted.include?(exit_code)
+        else
+          true
+        end
+
+      { "success" => success, "artifact" => result }
     end
 
     def record_artifacts(state, tool_name, args, result)
       case tool_name
-      when "fs_read"
+      when "fs.read"
         state.record_file_read(args["path"], meta: file_meta(args["path"]))
-      when "fs_write_diff"
+      when "fs.write_diff"
         state.record_file_written(args["path"])
-      when "git_apply"
-        state.record_patch_applied
-      when "check_command_help"
-        # result is the help output string from the command
-        help_text = result.is_a?(String) ? result : result.to_s
-        state.record_observation({ "type" => "COMMAND_HELP_CHECKED", "command" => args["command"],
-                                   "help_output" => help_text })
-      when "run_command"
+      when "exec.run"
         state.record_command(args["command"])
-        # Record command output if available (for structured results)
-        if result.is_a?(Hash) && result.key?("stdout")
-          state.record_observation({
-                                     "type" => "COMMAND_EXECUTED",
-                                     "command" => args["command"],
-                                     "stdout" => truncate_output(result["stdout"], lines: 20),
-                                     "stderr" => truncate_output(result["stderr"], lines: 20),
-                                     "exit_code" => result["exit_code"]
-                                   })
-        end
-      when "run_tests"
-        state.record_observation({ "type" => "TESTS_REQUESTED", "command" => args["command"] })
+        state.record_observation({
+                                   "type" => "COMMAND_EXECUTED",
+                                   "command" => args["command"],
+                                   "stdout" => truncate_output(result["stdout"].to_s, lines: 20),
+                                   "stderr" => truncate_output(result["stderr"].to_s, lines: 20),
+                                   "exit_code" => result["exit_code"].to_i
+                                 })
+      when "diagnostics.error_summary"
+        state.record_observation({ "type" => "ERROR_SUMMARY", "root_cause" => result["root_cause"],
+                                   "confidence" => result["confidence"] })
       end
     end
 
     def ensure_read_same_path!(state, path)
       p = path.to_s
-      raise Error, "fs_write requires prior fs_read of #{p}" unless state.artifacts[:files_read].include?(p)
+      raise Error, "fs.write requires prior fs.read of #{p}" unless state.artifacts[:files_read].include?(p)
 
       meta = state.files_read_meta[p]
       return if meta.nil? # best-effort; e.g. file didn't exist
@@ -509,29 +523,28 @@ module Devagent
     def validate_plan!(state, plan, visible_tools:)
       # For command-only plans (checking tools like rubocop), allow lower confidence
       # since these are straightforward tasks
-      has_commands = plan.steps.any? { |s| %w[run_command run_tests check_command_help].include?(s["action"].to_s) }
+      has_commands = plan.steps.any? { |s| %w[exec.run run_command run_tests].include?(s["action"].to_s) }
       min_confidence = has_commands ? 0.3 : 0.5
       raise Error, "plan confidence too low" if plan.confidence.to_f < min_confidence
 
       allowed = Array(visible_tools).map(&:name)
-      # Also check all tools in registry (for run_command/run_tests that might not be in visible_tools)
-      all_tool_names = context.tool_registry.tools.keys
-      allowed_names = (allowed + all_tool_names).uniq
+      # Plan-level allowlist must be LLM-visible tools only (never allow internal execution tools).
+      allowed_aliases = %w[fs_write fs_read fs_delete run_command run_tests].freeze
+      allowed_names = (allowed + allowed_aliases).uniq
 
       step_actions = plan.steps.map { |s| s["action"].to_s }
-      # fs_write is a logical action that gets converted to fs_write_diff
-      # Command-related actions are always allowed
+      # Back-compat aliases are allowed, but normalized during execution.
       unknown = step_actions.reject do |a|
-        allowed_names.include?(a) || a == "fs_write" || a == "run_command" || a == "run_tests" || a == "check_command_help"
+        allowed_names.include?(a)
       end
       raise Error, "plan uses unknown tools: #{unknown.uniq.join(", ")}" unless unknown.empty?
 
       # Read scope limiter: first cycle may read at most one file.
-      # Exception: if plan includes commands (run_command/run_tests/check_command_help), relax the restriction
+      # Exception: if plan includes commands, relax the restriction
       # This allows plans that run tools like rubocop even if they read some files first
-      has_commands = plan.steps.any? { |s| %w[run_command run_tests check_command_help].include?(s["action"].to_s) }
+      has_commands = plan.steps.any? { |s| %w[exec.run run_command run_tests].include?(s["action"].to_s) }
       if state.cycle.to_i == 0 && !has_commands
-        reads = plan.steps.count { |s| s["action"].to_s == "fs_read" }
+        reads = plan.steps.count { |s| %w[fs.read fs_read].include?(s["action"].to_s) }
         raise Error, "too many reads in first plan" if reads > 1
       end
 
@@ -540,19 +553,19 @@ module Devagent
 
       state.plan_fingerprints << fp
 
-      # Enforce: every fs_write depends on a prior fs_read of the same path.
+      # Enforce: every fs.write depends on a prior fs.read of the same path.
       reads = {}
       plan.steps.each do |s|
-        reads[s["step_id"]] = s["path"].to_s if s["action"] == "fs_read"
+        reads[s["step_id"]] = s["path"].to_s if %w[fs.read fs_read].include?(s["action"].to_s)
       end
 
       plan.steps.each do |s|
-        next unless s["action"] == "fs_write"
+        next unless %w[fs.write fs_write].include?(s["action"].to_s)
 
         path = s["path"].to_s
         deps = Array(s["depends_on"]).map(&:to_i)
         dep_paths = deps.filter_map { |id| reads[id] }
-        raise Error, "fs_write must depend_on prior fs_read of same path (#{path})" unless dep_paths.include?(path)
+        raise Error, "fs.write must depend_on prior fs.read of same path (#{path})" unless dep_paths.include?(path)
       end
     end
 
@@ -653,19 +666,11 @@ module Devagent
       steps = [
         {
           "step_id" => 1,
-          "action" => "check_command_help",
-          "command" => base_command,
-          "path" => nil,
-          "reason" => "Check command help to understand correct syntax",
-          "depends_on" => []
-        },
-        {
-          "step_id" => 2,
-          "action" => "run_command",
+          "action" => "exec.run",
           "command" => base_command == "rspec" ? "bundle exec rspec" : "bundle exec #{base_command}",
           "path" => nil,
           "reason" => "Run command to check status",
-          "depends_on" => [1]
+          "depends_on" => []
         }
       ]
 
@@ -724,6 +729,26 @@ module Devagent
       # Return last N lines with a note
       truncated = output_lines.last(lines).join("\n")
       "#{truncated}\n... (showing last #{lines} of #{output_lines.size} lines)"
+    end
+
+    # Build a minimal unified diff for creating a new file from scratch.
+    #
+    # This is controller-owned and deterministic; it avoids relying on model-produced diff formatting.
+    def build_add_file_diff(path:, content:)
+      raise Error, "content required" if content.to_s.empty?
+
+      lines = content.to_s.lines
+      raise Error, "content required" if lines.empty?
+
+      hunk_lines = lines.map { |line| "+#{line}" }.join
+      hunk_count = lines.size
+
+      <<~DIFF
+        --- /dev/null
+        +++ b/#{path}
+        @@ -0,0 +1,#{hunk_count} @@
+        #{hunk_lines}
+      DIFF
     end
   end
 end

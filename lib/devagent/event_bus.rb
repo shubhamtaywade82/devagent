@@ -16,7 +16,7 @@ module Devagent
   #
   #   # Publish events
   #   event_bus.publish(:plan_generated, summary: "Add login feature", actions: [...])
-  #   event_bus.publish(:action_executed, type: "fs_write", path: "lib/auth.rb")
+  #   event_bus.publish(:action_executed, type: "fs.write", path: "lib/auth.rb")
   #
   # Benefits:
   #   - Loose coupling: subscribers don't know about each other

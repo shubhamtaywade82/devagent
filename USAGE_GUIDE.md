@@ -1,6 +1,6 @@
 # DevAgent Usage Guide
 
-A complete guide to using DevAgent for autonomous coding tasks.
+A complete guide to using DevAgent for controller-driven, bounded coding tasks.
 
 ---
 
@@ -24,25 +24,12 @@ devagent --provider openai
 
 # Use Ollama (local)
 devagent --provider ollama
-
-# Or use provider-specific commands (if available)
-devagent openai
-devagent ollama
 ```
 
 ### 3. Start Using It
 
 Once started, you'll see:
 ```
-🔌 Devagent Provider Configuration
-  Provider: ollama
-  Host: http://localhost:11434
-  Models:
-    planner: llama3.2:3b
-    developer: llama3.2:3b
-    reviewer: llama3.1:8b
-  Embeddings: ollama (nomic-embed-text)
-
 ℹ info    Devagent ready. Type 'exit' to quit.
 devagent>
 ```
@@ -78,7 +65,23 @@ devagent> fix the bug in the payment processor
 
 ## Configuration
 
-### Your `.devagent.yml` File
+### Configuration files (global vs project)
+
+Devagent uses two different configuration files with different scopes:
+
+- **Global user config** (`~/.devagent.yml`)
+  - Provider defaults
+  - **Ollama host** (`ollama.host`) and timeouts (`ollama.timeout`)
+  - Preferences that should apply regardless of which directory you run `devagent` from
+
+- **Project config** (`.devagent.yml` in the repo root)
+  - File allowlist/denylist (sandbox)
+  - Project-specific model choices
+  - Test commands / indexing rules
+
+Project config never overrides Ollama host; host resolution is always global (CLI/ENV/`~/.devagent.yml`/default).
+
+### Your project `.devagent.yml` file
 
 Located in your project root, this file controls:
 - Provider (Ollama/OpenAI)
@@ -96,11 +99,45 @@ reviewer_model: "llama3.1:8b"
 embed_model: "nomic-embed-text"
 
 ollama:
-  host: "http://localhost:11434"
+  params:
+    temperature: 0.2
 
 openai:
   uri_base: "http://localhost:11434"
   api_key: "ollama"
+```
+
+### Ollama host resolution (recommended)
+
+Devagent resolves the Ollama host without depending on the current working directory:
+
+1. **CLI flag**: `--ollama-host http://...`
+2. **Environment variable**: `OLLAMA_HOST=http://...`
+3. **User config**: `~/.devagent.yml` (`ollama.host`)
+4. **Default**: `http://localhost:11434`
+
+Examples:
+
+```bash
+export OLLAMA_HOST=http://192.168.1.14:11434
+devagent --provider ollama
+
+devagent --provider ollama --ollama-host http://localhost:11434
+```
+
+User config (`~/.devagent.yml`):
+
+```yaml
+ollama:
+  host: http://192.168.1.14:11434
+  timeout: 60
+```
+
+Inspect resolved config:
+
+```bash
+devagent config
+devagent diag
 ```
 
 ---
@@ -131,11 +168,13 @@ Executes the plan step by step:
 ### 4. Observation & Decision
 After execution:
 - Observes results
-- Runs tests
+- Runs tests (when applicable)
 - Makes decisions:
   - **SUCCESS** - Task complete
   - **RETRY** - Try again with changes
   - **HALT** - Stop (blocked or repeated failures)
+
+Iteration is strictly bounded by a controller-enforced maximum and halts on repeated failures or low confidence.
 
 ---
 
@@ -149,8 +188,8 @@ devagent> add a factorial function to lib/math.rb
 [⠇] Planning ...
 Plan: Add factorial function (85%)
 
-[1/2] fs_read lib/math.rb
-[2/2] fs_write lib/math.rb
+[1/2] fs.read lib/math.rb
+[2/2] fs.write lib/math.rb
 [⠇] Running tests ...
 ✓ Tests passed
 
@@ -163,11 +202,16 @@ SUCCESS: Task completed
 
 DevAgent can use these tools:
 
-- **fs_read** - Read files
-- **fs_write** - Write files (with diff generation)
-- **fs_delete** - Delete files
-- **run_tests** - Run test suite
-- **run_command** - Execute shell commands
+- **fs.read** - Read files
+- **fs.write** - Propose edits (controller applies diff)
+- **fs.create** - Create new files (controller applies diff)
+- **fs.delete** - Delete files
+- **exec.run** - Execute allowlisted shell commands
+- **diagnostics.error_summary** - Summarize stderr into likely root cause
+
+All file modifications are applied via controller-generated diffs. The language model never writes files directly.
+
+`exec.run` uses a structured command form (program + args), not a raw shell string.
 
 ---
 
@@ -217,24 +261,23 @@ auto:
 ```
 
 ### 4. Check Results
-DevAgent will:
-- Show what it's doing
-- Run tests automatically
-- Report success/failure
-- Ask for clarification if needed
+DevAgent will, when applicable:
+- Show planned and executed steps
+- Run allowlisted test commands
+- Verify success via observed results
+- Ask for clarification if blocked
 
 ---
 
 ## Troubleshooting
 
 ### "No chunks indexed"
-- **With Ollama**: Expected - embeddings disabled for stability
-- **With OpenAI**: Check if embeddings are working
-- **Solution**: Use `devagent openai` for full features
+- Check your embedding provider/model settings and connectivity.
+- Run: `devagent diag` and `devagent test`
 
 ### "Connection refused"
 - Check if Ollama server is running
-- Verify host in `.devagent.yml`
+- Verify host via `devagent config` (and/or `OLLAMA_HOST`, `~/.devagent.yml`, `--ollama-host`)
 - Test: `curl http://localhost:11434/api/tags`
 
 ### "Plan rejected"
@@ -246,6 +289,11 @@ DevAgent will:
 ### "Halting: repeated decision"
 - Agent is stuck in a loop
 - **Solution**: Provide more context or break down the task
+
+### "Wrong model behavior" / "poor results"
+- Check: `devagent diag` (provider + selected models)
+- Model size matters (e.g., 3B vs 8B vs 70B): smaller models often struggle with multi-step edits and strict schemas
+- Context/window settings (e.g., `openai.options.num_ctx`) can limit planning quality
 
 ---
 
@@ -310,8 +358,8 @@ In the REPL:
 
 ## Limitations
 
-⚠️ **No Code Context with Native Ollama**
-- Use `devagent openai` for better results
+⚠️ **Environment dependencies**
+- Devagent will not install system dependencies for you (Ruby, Bundler, Node, etc.). Ensure your environment is set up first.
 
 ⚠️ **File Access Restrictions**
 - Only files in allowlist

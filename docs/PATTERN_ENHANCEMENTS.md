@@ -160,7 +160,7 @@ end
 
 # Publish events (replaces tracer.event)
 event_bus.publish(:plan_generated, summary: "Add login", confidence: 0.8)
-event_bus.publish(:action_executed, type: "fs_write", path: "lib/auth.rb")
+event_bus.publish(:action_executed, type: "fs.write", path: "lib/auth.rb")
 event_bus.publish(:tests_failed, summary: "Login tests failed")
 ```
 
@@ -174,7 +174,7 @@ event_bus.subscribe(:plan_generated) { |data| send_email_notification(data) }
 
 # Conditional subscriber
 event_bus.subscribe(:action_executed) do |data|
-  if data[:type] == "fs_write" && data[:path] =~ /spec/
+  if data[:type] == "fs.write" && data[:path] =~ /spec/
     puts "✓ Test file modified: #{data[:path]}"
   end
 end
@@ -233,7 +233,7 @@ class Orchestrator
   def run(task)
     plan = planner.plan(task)           # Manual call
     execute_actions(plan.actions)        # Manual call
-    result = run_tests                   # Manual call
+    result = exec_run                    # Manual call
     if result == :failed
       plan = planner.plan(task)         # Manual replan
     end
@@ -313,7 +313,7 @@ class ReviewerAgent < AgentBase
     issues = []
 
     actions.each do |action|
-      if action["type"] == "fs_write" && !action["path"].include?("spec")
+      if action["type"] == "fs.write" && !action["path"].include?("spec")
         issues << "No test added for #{action["path"]}"
       end
     end
@@ -450,7 +450,7 @@ end
 def run(task)
   plan = planner.plan(task)           # Manual
   execute_actions(plan.actions)        # Manual
-  result = run_tests                   # Manual
+  result = exec_run                    # Manual (e.g., exec.run "bundle exec rspec")
   if result == :failed
     replan
   end

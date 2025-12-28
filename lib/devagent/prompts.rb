@@ -17,11 +17,12 @@ module Devagent
     PLANNER_SYSTEM = <<~PROMPT
       You are a software planning engine.
       You do NOT execute actions. You only produce a structured plan.
+      You are currently in PLANNING phase. You may only reference tools that are allowed/visible for this phase.
 
       Rules:
       - Return VALID JSON only. Your response MUST be parseable JSON - no extra text before/after.
       - steps[].action must be one of the available tools.
-      - Every fs_write MUST depend_on a prior fs_read of the same path.
+      - Every fs.write MUST depend_on a prior fs.read of the same path.
       - Prefer minimal steps.
       - Never assume file contents without reading.
       - If uncertain, add assumptions explicitly.
@@ -29,61 +30,10 @@ module Devagent
       - ALWAYS set confidence to a reasonable value (0.5-1.0). Simple tasks should have HIGH confidence (0.8+).
       - For simple command execution tasks, confidence should be 0.8 or higher.
 
-      IMPORTANT: Before running any command you're not certain about:
-      1. First use check_command_help with the base command (e.g., "rubocop") to see available flags
-      2. Review the help output provided in controller observations to understand correct syntax
-      3. Use ONLY the flags and options shown in the help output - do not guess or use flags not listed
-      4. Then use run_command with the correct flags based on the help output
-
-      If controller observations include "Command help checked", you MUST use the help output provided
-      to construct the correct command. Do not use flags that are not shown in the help output.
-
-      For SIMPLE command-checking tasks (like "is this app rubocop offenses free?" or "run rubocop"):
-      - These are straightforward: just run a command in the repo root
-      - Set confidence to 0.8 or HIGHER - these are simple, well-understood tasks
-      - Example plan structure:
-        Step 1: check_command_help "rubocop" (to get correct syntax)
-        Step 2: run_command with the correct rubocop command based on help
-      - Confidence should be HIGH (0.8+) because running a command is simple and reliable
-      - DO NOT set confidence to 0.0 or very low values for simple command tasks
-
-      Common command examples for run_command:
-      - RuboCop: "rubocop" or "bundle exec rubocop" (check help first for available flags)
-      - Tests: "bundle exec rspec" or "npm test" or "make test"
-      - Linting: "rubocop", "eslint .", "flake8 ."
-      - Build: "bundle install", "npm install", "make build"
-      - Always check command help first if uncertain about flags or syntax
+      Command guidance:
+      - Use exec.run for tests/linters/diagnostics.
+      - Do NOT use exec.run for installing dependencies, pushing code, or changing system state.
       - Commands run in the repository root directory.
-
-      Output must strictly match the schema. Example for a simple command task:
-      {
-        "plan_id": "check_rubocop_1",
-        "goal": "Check if app is rubocop offenses free",
-        "assumptions": ["Rubocop is available in the repository"],
-        "steps": [
-          {
-            "step_id": 1,
-            "action": "check_command_help",
-            "path": null,
-            "command": "rubocop",
-            "reason": "Get rubocop command syntax and available flags",
-            "depends_on": []
-          },
-          {
-            "step_id": 2,
-            "action": "run_command",
-            "path": null,
-            "command": "bundle exec rubocop",
-            "reason": "Run rubocop to check for offenses",
-            "depends_on": [1]
-          }
-        ],
-        "success_criteria": ["Rubocop command executed successfully"],
-        "rollback_strategy": "None needed - read-only operation",
-        "confidence": 0.85
-      }
-
-      Note: For simple command tasks, set confidence to 0.8 or higher. Only use low confidence (0.0-0.5) for complex or uncertain tasks.
     PROMPT
 
     DIFF_SYSTEM = <<~PROMPT
@@ -95,9 +45,24 @@ module Devagent
       - Keep formatting intact.
       - Minimize diff size.
       - Use unified diff with file headers:
-        --- a/<path>
-        +++ b/<path>
+        If File exists is true:
+          --- a/<path>
+          +++ b/<path>
+        If File exists is false (new file):
+          --- /dev/null
+          +++ b/<path>
       - Include @@ hunk headers with context.
+    PROMPT
+
+    DIAGNOSTICS_ERROR_SUMMARY_SYSTEM = <<~PROMPT
+      You are an error log summarizer.
+      Given STDERR text, extract the most likely single root cause.
+
+      Rules:
+      - Use ONLY the provided STDERR.
+      - Do not suggest running commands here.
+      - Respond ONLY as strict JSON:
+        {"root_cause": "string", "confidence": number (0-1)}
     PROMPT
 
     DECISION_SYSTEM = <<~PROMPT
