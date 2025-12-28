@@ -194,6 +194,24 @@ bundle install
 bundle exec rake spec
 ```
 
+### Ubuntu/Debian local setup notes
+
+On a fresh Ubuntu/Debian machine, you may need system packages for Ruby + native extensions:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ruby-full ruby-dev build-essential git libsqlite3-dev libyaml-dev
+```
+
+This repo’s `Gemfile.lock` may require a specific Bundler version. If you see a Bundler version mismatch, install the locked version and use a local bundle path (avoids permissions issues and keeps gems in `vendor/`, which is gitignored):
+
+```bash
+sudo gem install bundler -v 2.7.1 -N
+bundle _2.7.1_ config set --local path vendor/bundle
+bundle _2.7.1_ install
+bundle _2.7.1_ exec rspec
+```
+
 The project uses RSpec for tests and ships with a GitHub Actions workflow that runs the static audit and specs. Run `bundle exec rake install` to install the gem locally and `bundle exec rake release` to publish new versions.
 
 ## License
