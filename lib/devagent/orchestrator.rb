@@ -34,9 +34,7 @@ module Devagent
       if %w[EXPLANATION GENERAL].include?(state.intent)
         # Use repo context if the question is about the repository
         use_repo_context = question_about_repo?(task)
-        if use_repo_context
-          with_spinner("Indexing") { context.index.build! }
-        end
+        with_spinner("Indexing") { context.index.build! } if use_repo_context
         return answer_unactionable(task, state.intent_confidence, use_repo_context: use_repo_context)
       end
       return answer_unactionable(task, state.intent_confidence, use_repo_context: false) if state.intent == "REJECT"
@@ -46,7 +44,7 @@ module Devagent
       max_cycles = context.config.dig("auto", "max_iterations") || 3
       state.phase = :planning
 
-      while !%i[done halted].include?(state.phase)
+      until %i[done halted].include?(state.phase)
         case state.phase
         when :planning
           visible_tools = if context.tool_registry.respond_to?(:tools_for_phase)
@@ -60,7 +58,8 @@ module Devagent
           end
 
           state.plan = plan
-          context.tracer.event("plan", plan_id: plan.plan_id, goal: plan.goal, confidence: plan.confidence, steps: plan.steps)
+          context.tracer.event("plan", plan_id: plan.plan_id, goal: plan.goal, confidence: plan.confidence,
+                                       steps: plan.steps)
           streamer.say("Plan: #{plan.goal} (#{(plan.confidence * 100).round}%)") if plan.goal && !quiet?
 
           begin
@@ -117,7 +116,9 @@ module Devagent
       total = plan.steps.size
       plan.steps.each do |step|
         state.current_step = step["step_id"].to_i
-        streamer.say("[#{state.current_step}/#{total}] #{step["action"]} #{step["path"] || step["command"]}".strip) unless quiet?
+        unless quiet?
+          streamer.say("[#{state.current_step}/#{total}] #{step["action"]} #{step["path"] || step["command"]}".strip)
+        end
         ensure_dependencies!(step, state.step_results)
         result = execute_step(state, plan, step)
         state.step_results[step["step_id"]] = result
@@ -127,7 +128,8 @@ module Devagent
         streamer.say("Step #{step["step_id"]} failed: #{e.message}", level: :error)
         state.record_error(signature: "step_failed:#{step["step_id"]}", message: e.message)
         state.step_results[step["step_id"]] = { "success" => false, "error" => e.message }
-        state.record_observation({ "type" => "STEP_FAILED", "step_id" => step["step_id"], "status" => "FAIL", "error" => e.message })
+        state.record_observation({ "type" => "STEP_FAILED", "step_id" => step["step_id"], "status" => "FAIL",
+                                   "error" => e.message })
         break
       end
     end
@@ -135,6 +137,7 @@ module Devagent
     def ensure_dependencies!(step, results)
       Array(step["depends_on"]).each do |dep|
         next if dep.to_i == 0
+
         res = results[dep]
         raise Error, "Dependency #{dep} not satisfied" unless res && res["success"]
       end
@@ -151,12 +154,15 @@ module Devagent
       when "fs_write"
         # diff-first write: read must have happened, then generate diff, then apply diff.
         raise Error, "path required" if path.to_s.empty?
+
         ensure_read_same_path!(state, path)
         original = context.tool_bus.read_file("path" => path.to_s)
-        diff = DiffGenerator.new(context).generate(path: path.to_s, original: original, goal: plan.goal.to_s, reason: step["reason"].to_s)
+        diff = DiffGenerator.new(context).generate(path: path.to_s, original: original, goal: plan.goal.to_s,
+                                                   reason: step["reason"].to_s)
         tool_invoke_with_policy(state, "fs_write_diff", "path" => path.to_s, "diff" => diff)
       when "fs_delete"
         raise Error, "path required" if path.to_s.empty?
+
         ensure_read_same_path!(state, path)
         tool_invoke_with_policy(state, "fs_delete", "path" => path.to_s)
       when "run_tests"
@@ -316,7 +322,7 @@ module Devagent
         Recent conversation:
         #{history}
 
-        #{dir_structure.empty? ? "" : "Directory structure:\n#{dir_structure}\n\n"}Repository context:
+        #{"Directory structure:\n#{dir_structure}\n\n" unless dir_structure.empty?}Repository context:
         #{retrieved.empty? ? "(none)" : retrieved}
 
         Question:
@@ -411,6 +417,7 @@ module Devagent
     def hard_stop?(state, max_cycles:)
       return true if state.tool_rejections >= 2
       return true if state.repeat_error_count >= 2
+
       false
     end
 
@@ -430,6 +437,7 @@ module Devagent
 
       fp = fingerprint_plan(plan)
       raise Error, "plan repeated without progress" if state.plan_fingerprints.include?(fp)
+
       state.plan_fingerprints << fp
 
       # Enforce: every fs_write depends on a prior fs_read of the same path.
@@ -440,6 +448,7 @@ module Devagent
 
       plan.steps.each do |s|
         next unless s["action"] == "fs_write"
+
         path = s["path"].to_s
         deps = Array(s["depends_on"]).map(&:to_i)
         dep_paths = deps.filter_map { |id| reads[id] }
@@ -486,9 +495,9 @@ module Devagent
       []
     end
 
-    def with_spinner(label)
+    def with_spinner(label, &)
       if ui&.respond_to?(:spinner)
-        ui.spinner(label).run { yield }
+        ui.spinner(label).run(&)
       else
         yield
       end
@@ -518,9 +527,9 @@ module Devagent
       return "" if current_depth >= max_depth
 
       entries = Dir.entries(dir_path)
-                  .reject { |e| e.start_with?(".") }
-                  .reject { |e| e == "node_modules" || e == ".git" || e == ".devagent" }
-                  .sort
+                   .reject { |e| e.start_with?(".") }
+                   .reject { |e| ["node_modules", ".git", ".devagent"].include?(e) }
+                   .sort
 
       return "" if entries.empty?
 
@@ -531,11 +540,11 @@ module Devagent
         current_prefix = is_last ? "└── " : "├── "
         result << "#{prefix}#{current_prefix}#{entry}"
 
-        if File.directory?(full_path)
-          next_prefix = prefix + (is_last ? "    " : "│   ")
-          subtree = build_tree(full_path, next_prefix, max_depth: max_depth, current_depth: current_depth + 1)
-          result << subtree unless subtree.empty?
-        end
+        next unless File.directory?(full_path)
+
+        next_prefix = prefix + (is_last ? "    " : "│   ")
+        subtree = build_tree(full_path, next_prefix, max_depth: max_depth, current_depth: current_depth + 1)
+        result << subtree unless subtree.empty?
       end
 
       result.join("\n")
