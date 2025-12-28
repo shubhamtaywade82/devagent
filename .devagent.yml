@@ -19,8 +19,9 @@ ollama:
     temperature: 0.2
     top_p: 0.95
 openai:
-  uri_base: "https://api.openai.com/v1"
-  api_key_env: "OPENAI_API_KEY"
+  # Use Ollama's OpenAI-compatible API (for embeddings)
+  uri_base: "http://localhost:11434/v1"
+  api_key: "ollama" # Dummy key for Ollama
   request_timeout: 600
   params:
     temperature: 0.2
