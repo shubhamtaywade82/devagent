@@ -10,6 +10,26 @@ module Devagent
     end
 
     def generate(path:, original:, goal:, reason:, file_exists:)
+      # Check for duplicate comments BEFORE generating diff (for "add comment at top" tasks)
+      reason_lower = reason.to_s.downcase
+      goal_lower = goal.to_s.downcase
+      if (reason_lower.include?("comment") && (reason_lower.include?("top") || reason_lower.include?("beginning"))) ||
+         (goal_lower.include?("comment") && (goal_lower.include?("top") || goal_lower.include?("beginning")))
+        original_lines = original.lines
+        first_few_lines = original_lines.first(3).map(&:to_s).map(&:strip)
+        has_comment = first_few_lines.any? do |line|
+          line.start_with?("#") && (line.downcase.include?("comment") || line.downcase.include?("added"))
+        end
+
+        if has_comment
+          # Comment already exists, return a valid no-op diff
+          file_header = "--- a/#{path}\n+++ b/#{path}"
+          hunk_header = "@@ -1,3 +1,3 @@"
+          context_lines = original_lines.first(3).map { |line| " #{line}" }.join
+          return "#{file_header}\n#{hunk_header}\n#{context_lines}"
+        end
+      end
+
       prompt = <<~PROMPT
         #{Prompts::DIFF_SYSTEM}
 
@@ -49,16 +69,8 @@ module Devagent
         if (reason_lower.include?("comment") && (reason_lower.include?("top") || reason_lower.include?("beginning"))) ||
            (goal_lower.include?("comment") && (goal_lower.include?("top") || goal_lower.include?("beginning")))
           # For "add comment at top" tasks, construct a proper unified diff
+          # (Duplicate check already happened at the beginning, so comment doesn't exist)
           original_lines = original.lines
-
-          # Check if comment already exists at the top to avoid duplicates
-          first_line = original_lines.first.to_s.strip
-          if first_line.start_with?("#") && (first_line.include?("comment") || first_line.include?("Added"))
-            # Comment already exists, don't add another one
-            # Return a minimal diff that does nothing (or skip adding)
-            return diff # Return original (empty) diff to skip
-          end
-
           comment_text = "# Added comment\n"
 
           # Construct proper unified diff format with minimal context

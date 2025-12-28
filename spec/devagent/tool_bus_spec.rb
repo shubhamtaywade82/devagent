@@ -99,20 +99,26 @@ RSpec.describe Devagent::ToolBus do
 
   describe "#run_tests" do
     before do
-      allow(Devagent::Util).to receive(:run!).and_return("ok")
+      # Mock run_capture instead of run! since we changed the implementation
+      allow(Devagent::Util).to receive(:run_capture).and_return({
+        "stdout" => "80 examples, 0 failures\n",
+        "stderr" => "",
+        "exit_code" => 0,
+        "success" => true
+      })
     end
 
     it "executes provided command" do
       config["auto"]["command_allowlist"] = ["bundle"]
       expect(tool_bus.run_tests("command" => "bundle exec rspec")).to eq(:ok)
-      expect(Devagent::Util).to have_received(:run!).with(["bundle", "exec", "rspec"], chdir: repo)
+      expect(Devagent::Util).to have_received(:run_capture).with(["bundle", "exec", "rspec"], chdir: repo)
     end
 
     it "skips when dry run is enabled" do
       config["auto"]["dry_run"] = true
 
       expect(tool_bus.run_tests("command" => "bundle exec rspec")).to eq(:skipped)
-      expect(Devagent::Util).not_to have_received(:run!)
+      expect(Devagent::Util).not_to have_received(:run_capture)
     end
   end
 
