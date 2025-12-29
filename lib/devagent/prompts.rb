@@ -54,6 +54,12 @@ module Devagent
       - For simple command execution tasks, confidence should be 0.8 or higher.
       - For simple file edits (add comment, change one line), confidence should be 0.8 or higher.
 
+      Filesystem semantics (IMPORTANT):
+      - Use fs.read ONLY for existing files.
+      - Use fs.write ONLY for editing existing files, and ONLY after fs.read of the SAME path (via depends_on).
+      - Use fs.create ONLY to create a NEW file that does NOT already exist. Do NOT fs.read first for new file creation.
+      - Never use fs.write to create new files.
+
       File reading guidance:
       - For questions about repository description/purpose, identify and read relevant documentation files (README, docs, etc.) based on what's available in the repository.
       - For questions about specific code, read the relevant source files.
