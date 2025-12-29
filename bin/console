@@ -537,6 +537,256 @@ module PhaseInspector
     end
   end
 
+  # Test only the Execution phase
+  def test_execution(task = nil, plan: nil, build_index: false)
+    ctx = setup_context
+
+    if task.nil? && plan.nil?
+      puts "Usage: test_execution('your task here')"
+      puts "   or: test_execution(plan: <Plan object>)"
+      puts "Example: test_execution('read README.md')"
+      puts ""
+      puts "Options:"
+      puts "  build_index: true  - Build index before planning (default: false)"
+      return
+    end
+
+    puts "=" * 60
+    puts "Testing Execution Phase"
+    puts "=" * 60
+    puts ""
+
+    # Get or generate plan
+    if plan.nil?
+      if task.nil?
+        puts "❌ Error: Either task or plan must be provided"
+        return
+      end
+
+      puts "Task: #{task}"
+      puts ""
+
+      # Build index if requested
+      if build_index
+        index = ctx.index
+        metadata = index.metadata
+        backend_info = ctx.embedding_backend_info
+
+        needs_rebuild = if metadata && !metadata.empty?
+                          metadata["provider"] != backend_info["provider"] ||
+                            metadata["model"] != ctx.model_for(:embedding) ||
+                            (metadata["dim"] && backend_info["dim"] && metadata["dim"] != backend_info["dim"])
+                        else
+                          true
+                        end
+
+        if needs_rebuild
+          puts "Building index..."
+          index.build!
+        end
+        puts ""
+      end
+
+      # Generate plan
+      puts "Generating plan..."
+      planner = Devagent::Planner.new(ctx)
+      plan = planner.plan(task)
+      puts "✅ Plan generated: #{plan.goal} (#{(plan.confidence * 100).round}% confidence)"
+      puts ""
+    else
+      puts "Using provided plan: #{plan.goal}"
+      puts ""
+    end
+
+    if plan.steps.empty?
+      puts "⚠️  Plan has no steps to execute"
+      return
+    end
+
+    puts "📋 Plan Steps (#{plan.steps.size}):"
+    puts "-" * 60
+    plan.steps.each do |step|
+      puts "  Step #{step["step_id"]}: #{step["action"]}"
+      puts "    Path: #{step["path"]}" if step["path"]
+      puts "    Command: #{step["command"]}" if step["command"]
+      puts "    Reason: #{step["reason"]}" if step["reason"]
+      puts "    Depends on: #{step["depends_on"].join(", ")}" if step["depends_on"] && !step["depends_on"].empty?
+    end
+    puts ""
+
+    # Create a minimal state for execution
+    state = Devagent::AgentState.initial(
+      goal: plan.goal || task || "test execution"
+    )
+    state.intent = "CODE_EDIT"
+    state.intent_confidence = 0.8
+    state.plan = plan
+    state.phase = :execution
+    state.cycle = 1
+
+    # Create a simple orchestrator to access execution methods
+    # We'll use a custom class that exposes execute_plan
+    execution_orchestrator = Class.new(Devagent::Orchestrator) do
+      attr_reader :execution_log
+
+      def initialize(context, output: $stdout, ui: nil)
+        super
+        @execution_log = []
+      end
+
+      def execute_plan_with_logging(state)
+        plan = state.plan
+
+        plan.steps.each do |step|
+          state.current_step = step["step_id"].to_i
+          step_info = {
+            step_id: step["step_id"],
+            action: step["action"],
+            path: step["path"],
+            command: step["command"],
+            started_at: Time.now
+          }
+
+          begin
+            ensure_dependencies!(step, state.step_results)
+            result = execute_step(state, plan, step)
+            state.step_results[step["step_id"]] = result
+            state.record_observation(normalize_step_observation(result, step))
+
+            step_info[:success] = true
+            step_info[:result] = result
+            step_info[:duration] = Time.now - step_info[:started_at]
+
+            @execution_log << step_info
+
+            raise Error, "step #{step["step_id"]} failed" unless result["success"]
+          rescue StandardError => e
+            error_msg = e.message
+            state.record_error(signature: "step_failed:#{step["step_id"]}", message: error_msg)
+            state.step_results[step["step_id"]] = { "success" => false, "error" => error_msg }
+            state.record_observation({
+                                       "type" => "STEP_FAILED",
+                                       "step_id" => step["step_id"],
+                                       "status" => "FAIL",
+                                       "error" => error_msg
+                                     })
+
+            step_info[:success] = false
+            step_info[:error] = error_msg
+            step_info[:duration] = Time.now - step_info[:started_at]
+
+            @execution_log << step_info
+            break
+          end
+        end
+      end
+    end.new(ctx, output: StringIO.new, ui: nil)
+
+    # Execute the plan
+    puts "🚀 Executing plan..."
+    puts "-" * 60
+    begin
+      execution_orchestrator.execute_plan_with_logging(state)
+    rescue StandardError => e
+      puts "❌ Execution failed: #{e.class}: #{e.message}"
+      puts ""
+    end
+
+    # Show results
+    puts ""
+    puts "✅ Execution Results:"
+    puts "-" * 60
+    execution_orchestrator.execution_log.each do |log_entry|
+      status = log_entry[:success] ? "✅" : "❌"
+      puts "#{status} Step #{log_entry[:step_id]}: #{log_entry[:action]}"
+      puts "   Duration: #{(log_entry[:duration] * 1000).round(2)}ms"
+
+      puts "   Path: #{log_entry[:path]}" if log_entry[:path]
+      puts "   Command: #{log_entry[:command]}" if log_entry[:command]
+
+      if log_entry[:success]
+        result = log_entry[:result]
+        artifact = result["artifact"] if result.is_a?(Hash)
+
+        if artifact.is_a?(Hash)
+          case log_entry[:action]
+          when "fs.read"
+            content = artifact["content"]
+            if content
+              preview = content[0..200].gsub("\n", "\\n")
+              puts "   Content preview: #{preview}#{"..." if content.length > 200}"
+              puts "   Content length: #{content.length} characters"
+            end
+          when "fs.write", "fs.create", "fs.write_diff"
+            puts "   File written successfully"
+            puts "   Path: #{artifact["path"]}" if artifact["path"]
+          when "exec.run"
+            puts "   Exit code: #{artifact["exit_code"]}" if artifact["exit_code"]
+            if artifact["stdout"]
+              stdout_preview = artifact["stdout"][0..200].gsub("\n", "\\n")
+              puts "   Stdout: #{stdout_preview}#{"..." if artifact["stdout"].length > 200}"
+            end
+            if artifact["stderr"]
+              stderr_preview = artifact["stderr"][0..200].gsub("\n", "\\n")
+              puts "   Stderr: #{stderr_preview}#{"..." if artifact["stderr"].length > 200}"
+            end
+          end
+        end
+      else
+        puts "   Error: #{log_entry[:error]}"
+      end
+      puts ""
+    end
+
+    # Show artifacts summary
+    puts "📦 Artifacts Summary:"
+    puts "-" * 60
+    puts "  Files read: #{state.artifacts[:files_read].size}"
+    state.artifacts[:files_read].each { |f| puts "    - #{f}" }
+    puts "  Files written: #{state.artifacts[:files_written].size}"
+    state.artifacts[:files_written].each { |f| puts "    - #{f}" }
+    puts "  Commands run: #{state.artifacts[:commands_run].size}"
+    state.artifacts[:commands_run].each { |c| puts "    - #{c}" }
+    puts "  Patches applied: #{state.artifacts[:patches_applied]}"
+    puts ""
+
+    # Show observations
+    if state.observations.any?
+      puts "👁️  Observations (#{state.observations.size}):"
+      puts "-" * 60
+      state.observations.last(5).each do |obs|
+        if obs.is_a?(Hash)
+          puts "  - #{obs["type"]}: #{obs["message"] || obs["status"] || "N/A"}"
+        else
+          puts "  - #{obs}"
+        end
+      end
+      puts ""
+    end
+
+    # Show errors
+    if state.errors.any?
+      puts "❌ Errors (#{state.errors.size}):"
+      puts "-" * 60
+      state.errors.each do |err|
+        if err.is_a?(Hash)
+          puts "  - #{err["signature"]}: #{err["message"]}"
+        else
+          puts "  - #{err}"
+        end
+      end
+      puts ""
+    end
+
+    puts "=" * 60
+
+    {
+      state: state,
+      execution_log: execution_orchestrator.execution_log,
+      success: execution_orchestrator.execution_log.all? { |e| e[:success] }
+    }
+  end
+
   # Create a tracking orchestrator that exposes state and tracks phase transitions
   def create_tracking_orchestrator
     ctx = setup_context
@@ -1036,6 +1286,7 @@ puts "  setup_context                    - Create context"
 puts "  test_classifying(task)           - Test only the Classifying phase"
 puts "  test_indexing(rebuild: false)    - Test only the Indexing phase"
 puts "  test_planning(task, build_index: true) - Test only the Planning phase"
+puts "  test_execution(task, build_index: false) - Test only the Execution phase"
 puts "  create_tracking_orchestrator     - Create orchestrator that tracks phases"
 puts "  show_phases                       - List all available phases"
 puts "  show_phase_history(orch)          - Show phase transition history"
