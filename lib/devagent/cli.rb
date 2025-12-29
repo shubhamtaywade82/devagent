@@ -28,6 +28,16 @@ module Devagent
     def start(*args)
       ctx = build_context
 
+      # Show model selection if verbose or if models differ from defaults
+      if options[:model] || options[:planner_model] || options[:developer_model] || options[:reviewer_model]
+        say("Using models:", :green)
+        say("  Default: #{ctx.model_for(:default)}", :cyan)
+        say("  Planner: #{ctx.model_for(:planner)}", :cyan)
+        say("  Developer: #{ctx.model_for(:developer)}", :cyan)
+        say("  Reviewer: #{ctx.model_for(:reviewer)}", :cyan)
+        say("")
+      end
+
       # If a prompt is provided, execute it directly and exit
       if args.any? && !args.first.nil? && !args.first.strip.empty?
         prompt = args.join(" ").strip
