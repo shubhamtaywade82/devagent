@@ -19,6 +19,12 @@ RSpec.describe Devagent::Orchestrator do
     ]
   end
 
+  before do
+    # Mock File.exist? to return true for lib/devagent/version.rb (existing file)
+    allow(File).to receive(:exist?).and_call_original
+    allow(File).to receive(:exist?).with("/workspace/lib/devagent/version.rb").and_return(true)
+  end
+
   def build_plan(steps:, confidence: 0.8)
     Devagent::Plan.new(
       plan_id: "p",
@@ -149,6 +155,8 @@ RSpec.describe Devagent::Orchestrator do
         { "step_id" => 1, "action" => "fs.create", "path" => "lib/devagent/version.rb", "content" => "x", "reason" => "create", "depends_on" => [] }
       ]
     )
+    # Ensure File.exist? returns true for this test (file already exists)
+    allow(File).to receive(:exist?).with("/workspace/lib/devagent/version.rb").and_return(true)
 
     expect do
       orchestrator.send(:validate_plan!, state, plan, visible_tools: visible_tools)

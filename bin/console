@@ -7,5 +7,388 @@ require "devagent"
 # You can add fixtures and/or initialization code here to make experimenting
 # with your gem easier. You can also use a different console, if you like.
 
+# Helper methods for inspecting phases/stages
+module PhaseInspector
+  # Create a context for testing
+  def setup_context
+    @context ||= Devagent::Context.build(Dir.pwd)
+    @context
+  end
+
+  # Create a tracking orchestrator that exposes state and tracks phase transitions
+  def create_tracking_orchestrator
+    ctx = setup_context
+
+    # Create a custom orchestrator that tracks and exposes state
+    Class.new(Devagent::Orchestrator) do
+      attr_reader :last_state, :phase_history
+
+      def initialize(context, output: $stdout, ui: nil)
+        super
+        @phase_history = []
+        @last_state = nil
+      end
+
+      def run(task)
+        @phase_history = []
+        state_created = nil
+        phase_history_ref = @phase_history # Capture in closure
+
+        # Intercept state creation by overriding AgentState.initial temporarily
+        original_method = Devagent::AgentState.method(:initial)
+
+        Devagent::AgentState.define_singleton_method(:initial) do |goal:|
+          state = original_method.call(goal: goal)
+          state_created = state
+
+          # Track initial phase
+          phase_history_ref << {
+            phase: state.phase,
+            cycle: state.cycle,
+            timestamp: Time.now
+          }
+
+          # Override state's phase setter to track transitions
+          # Capture state in closure to access its cycle
+          state_ref = state
+          original_phase_setter = state.method(:phase=)
+          state.define_singleton_method(:phase=) do |new_phase|
+            old_phase = @phase
+            result = original_phase_setter.call(new_phase)
+            phase_history_ref << {
+              from: old_phase,
+              to: new_phase,
+              cycle: state_ref.cycle,
+              timestamp: Time.now
+            }
+            result
+          end
+
+          state
+        end
+
+        begin
+          # Call parent run method - it will create state via our intercepted method
+          result = super
+
+          # Store the state that was actually used
+          @last_state = state_created
+
+          result
+        ensure
+          # Restore original method
+          Devagent::AgentState.define_singleton_method(:initial, original_method)
+        end
+
+        # Return state for inspection
+        @last_state
+      end
+    end.new(ctx, output: $stdout)
+  end
+
+  # Display all available phases
+  def show_phases
+    # Get phases from AgentState if available, otherwise use the known list
+    phases = begin
+      Devagent::AgentState::PHASES
+    rescue NameError
+      %i[intent planning execution observation reduction decision done halted]
+    end
+
+    puts "Available phases:"
+    phases.each_with_index do |phase, idx|
+      puts "  #{idx + 1}. #{phase}"
+    end
+    puts ""
+    puts "Typical phase flow:"
+    phases.each_with_index do |phase, idx|
+      puts "  #{phase} → #{phases[idx + 1]}" if idx < phases.size - 1
+    end
+  end
+
+  # Show phase history from tracking orchestrator
+  def show_phase_history(orchestrator)
+    if orchestrator.respond_to?(:phase_history) && orchestrator.phase_history.any?
+      puts "Phase transitions:"
+      orchestrator.phase_history.each_with_index do |transition, idx|
+        if transition[:phase]
+          # Initial phase entry
+          cycle_str = transition[:cycle] ? "cycle: #{transition[:cycle]}" : "initial"
+          puts "  #{idx + 1}. Initial phase: #{transition[:phase]} (#{cycle_str})"
+        elsif transition[:from] && transition[:to]
+          # Phase transition entry
+          cycle_str = transition[:cycle] ? "cycle: #{transition[:cycle]}" : "N/A"
+          puts "  #{idx + 1}. #{transition[:from]} → #{transition[:to]} (#{cycle_str})"
+        else
+          # Fallback for any other format
+          puts "  #{idx + 1}. #{transition.inspect}"
+        end
+      end
+    else
+      puts "No phase history available. Use create_tracking_orchestrator first."
+    end
+  end
+
+  # Inspect state from tracking orchestrator
+  def inspect_state(orchestrator)
+    state = orchestrator.respond_to?(:last_state) ? orchestrator.last_state : nil
+    unless state
+      puts "No state available. Run a task with tracking orchestrator first."
+      return
+    end
+
+    puts "=" * 60
+    puts "Agent State Inspection"
+    puts "=" * 60
+    puts "Phase: #{state.phase}"
+    puts "Goal: #{state.goal}"
+    puts "Intent: #{state.intent} (confidence: #{state.intent_confidence})"
+    puts "Cycle: #{state.cycle}"
+    puts "Confidence: #{state.confidence}"
+    puts "Current Step: #{state.current_step}"
+    puts ""
+    puts "Plan:"
+    if state.plan
+      puts "  Goal: #{state.plan.goal}"
+      puts "  Confidence: #{state.plan.confidence}"
+      puts "  Steps: #{state.plan.steps.size}"
+      state.plan.steps.each do |step|
+        puts "    - Step #{step["step_id"]}: #{step["action"]} #{step["path"] || step["command"]}"
+      end
+    else
+      puts "  (no plan yet)"
+    end
+    puts ""
+    puts "Artifacts:"
+    puts "  Files read: #{state.artifacts[:files_read].to_a.join(", ")}"
+    puts "  Files written: #{state.artifacts[:files_written].to_a.join(", ")}"
+    puts "  Commands run: #{state.artifacts[:commands_run].join(", ")}"
+    puts ""
+    puts "Observations (#{state.observations.size}):"
+    state.observations.last(5).each do |obs|
+      puts "  - #{obs["type"]}: #{obs["status"] || "N/A"}"
+    end
+    puts ""
+    puts "Errors (#{state.errors.size}):"
+    state.errors.each do |err|
+      puts "  - #{err["signature"]}: #{err["message"]}"
+    end
+    puts "=" * 60
+  end
+
+  # Show detailed phase results organized by phase
+  def show_phase_results(orchestrator)
+    state = orchestrator.respond_to?(:last_state) ? orchestrator.last_state : nil
+    unless state
+      puts "No state available. Run a task with tracking orchestrator first."
+      return
+    end
+
+    puts "=" * 60
+    puts "Phase Results Breakdown"
+    puts "=" * 60
+    puts ""
+
+    # Intent Classification Phase
+    puts "📋 INTENT CLASSIFICATION"
+    puts "-" * 60
+    if state.intent
+      puts "  Intent: #{state.intent}"
+      puts "  Confidence: #{(state.intent_confidence * 100).round(1)}%"
+    else
+      puts "  (not classified yet)"
+    end
+    puts ""
+
+    # Planning Phase
+    puts "📝 PLANNING"
+    puts "-" * 60
+    if state.plan
+      puts "  Plan Goal: #{state.plan.goal || "(empty)"}"
+      puts "  Confidence: #{(state.plan.confidence.to_f * 100).round(1)}%"
+      puts "  Plan ID: #{state.plan.plan_id}"
+      puts ""
+      puts "  Steps (#{state.plan.steps.size}):"
+      state.plan.steps.each_with_index do |step, idx|
+        puts "    #{idx + 1}. #{step["action"]}"
+        puts "       Path: #{step["path"]}" if step["path"]
+        puts "       Command: #{step["command"]}" if step["command"]
+        puts "       Reason: #{step["reason"]}" if step["reason"]
+        puts "       Depends on: #{step["depends_on"]}" if step["depends_on"] && !step["depends_on"].empty?
+      end
+      if state.plan.assumptions && !state.plan.assumptions.empty?
+        puts ""
+        puts "  Assumptions:"
+        state.plan.assumptions.each do |assumption|
+          puts "    - #{assumption}"
+        end
+      end
+      if state.plan.success_criteria && !state.plan.success_criteria.empty?
+        puts ""
+        puts "  Success Criteria:"
+        state.plan.success_criteria.each do |criterion|
+          puts "    - #{criterion}"
+        end
+      end
+    else
+      puts "  (no plan generated)"
+    end
+    puts ""
+
+    # Execution Phase
+    puts "⚙️  EXECUTION"
+    puts "-" * 60
+    if state.step_results && !state.step_results.empty?
+      puts "  Steps Executed: #{state.step_results.size}"
+      state.step_results.each do |step_id, result|
+        status = result["success"] ? "✓" : "✗"
+        puts "    #{status} Step #{step_id}:"
+        if result["success"]
+          puts "      Status: SUCCESS"
+          if result["artifact"] && result["artifact"].is_a?(Hash)
+            if result["artifact"]["content"]
+              content_preview = result["artifact"]["content"].to_s[0..100]
+              puts "      Content preview: #{content_preview}..."
+            end
+            puts "      Exit code: #{result["artifact"]["exit_code"]}" if result["artifact"]["exit_code"]
+          end
+        else
+          puts "      Status: FAILED"
+          puts "      Error: #{result["error"]}" if result["error"]
+        end
+      end
+    else
+      puts "  (no steps executed yet)"
+    end
+    puts ""
+
+    # Observation Phase
+    puts "👀 OBSERVATIONS"
+    puts "-" * 60
+    if state.observations.nil? || state.observations.empty?
+      puts "  (no observations yet)"
+    else
+      puts "  Total Observations: #{state.observations.size}"
+      state.observations.each_with_index do |obs, idx|
+        puts "    #{idx + 1}. [#{obs["type"]}]"
+        puts "       Status: #{obs["status"]}" if obs["status"]
+        puts "       Step ID: #{obs["step_id"]}" if obs["step_id"]
+        if obs["type"] == "COMMAND_EXECUTED"
+          puts "       Command: #{obs["command"]}" if obs["command"]
+          puts "       Exit Code: #{obs["exit_code"]}" if obs["exit_code"]
+          if obs["stdout"] && !obs["stdout"].empty?
+            stdout_preview = obs["stdout"].to_s.split("\n").first(3).join("\n")
+            puts "       STDOUT (first 3 lines):"
+            stdout_preview.split("\n").each { |line| puts "         #{line}" }
+          end
+          if obs["stderr"] && !obs["stderr"].empty?
+            stderr_preview = obs["stderr"].to_s.split("\n").first(3).join("\n")
+            puts "       STDERR (first 3 lines):"
+            stderr_preview.split("\n").each { |line| puts "         #{line}" }
+          end
+        end
+        puts "       Error: #{obs["error"]}" if obs["error"]
+        puts "       Message: #{obs["message"]}" if obs["message"]
+      end
+    end
+    puts ""
+
+    # Reduction Phase
+    puts "📊 REDUCTION"
+    puts "-" * 60
+    if state.summary
+      puts "  Summary: #{state.summary}"
+    else
+      puts "  (no summary yet)"
+    end
+    puts ""
+
+    # Decision Phase
+    puts "🎯 DECISION"
+    puts "-" * 60
+    if state.last_decision
+      puts "  Decision: #{state.last_decision}"
+      puts "  Confidence: #{(state.last_decision_confidence.to_f * 100).round(1)}%" if state.last_decision_confidence
+    else
+      puts "  (no decision made yet)"
+    end
+    puts ""
+
+    # Artifacts Summary
+    puts "📦 ARTIFACTS"
+    puts "-" * 60
+    puts "  Files Read: #{state.artifacts[:files_read].size}"
+    state.artifacts[:files_read].to_a.each do |file|
+      puts "    - #{file}"
+    end
+    puts "  Files Written: #{state.artifacts[:files_written].size}"
+    state.artifacts[:files_written].to_a.each do |file|
+      puts "    - #{file}"
+    end
+    puts "  Commands Run: #{state.artifacts[:commands_run].size}"
+    state.artifacts[:commands_run].each do |cmd|
+      puts "    - #{cmd}"
+    end
+    puts "  Patches Applied: #{state.artifacts[:patches_applied]}"
+    puts ""
+
+    # Errors
+    if state.errors && !state.errors.empty?
+      puts "❌ ERRORS"
+      puts "-" * 60
+      state.errors.each_with_index do |err, idx|
+        puts "  #{idx + 1}. #{err["signature"]}"
+        puts "     Message: #{err["message"]}"
+      end
+      puts ""
+    end
+
+    puts "=" * 60
+  end
+
+  # Read trace file to see phase transitions
+  def read_traces(limit: 20)
+    trace_path = File.join(Dir.pwd, ".devagent", "traces.jsonl")
+    unless File.exist?(trace_path)
+      puts "No trace file found at #{trace_path}"
+      return
+    end
+
+    require "json"
+    lines = File.readlines(trace_path).last(limit)
+    puts "Last #{lines.size} trace events:"
+    lines.each do |line|
+      event = JSON.parse(line)
+      puts "  [#{event["timestamp"]}] #{event["type"]}: #{event["payload"]}"
+    end
+  end
+end
+
+# Include helpers in main scope
+include PhaseInspector
+
+# Print welcome message
+puts "Devagent Console"
+puts "=" * 60
+puts "Available helper methods:"
+puts "  setup_context                    - Create context"
+puts "  create_tracking_orchestrator     - Create orchestrator that tracks phases"
+puts "  show_phases                       - List all available phases"
+puts "  show_phase_history(orch)          - Show phase transition history"
+puts "  inspect_state(orch)               - Show detailed state information"
+puts "  show_phase_results(orch)          - Show detailed results for each phase"
+puts "  read_traces(limit: 20)            - Read trace file for phase events"
+puts ""
+puts "Example usage:"
+puts "  ctx = setup_context"
+puts "  show_phases"
+puts "  orch = create_tracking_orchestrator"
+puts "  state = orch.run('create a calculator.rb with add, substract, multiply and divide methods')"
+puts "  show_phase_results(orch)          # See detailed results from each phase"
+puts "  show_phase_history(orch)          # See phase transitions"
+puts "  inspect_state(orch)                # See overall state summary"
+puts "=" * 60
+puts ""
+
 require "irb"
 IRB.start(__FILE__)

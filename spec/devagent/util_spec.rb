@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require "fileutils"
+require "tmpdir"
+
 RSpec.describe Devagent::Util do
   describe ".run!" do
     it "runs a command successfully (array form)" do
@@ -29,20 +32,25 @@ RSpec.describe Devagent::Util do
     end
 
     it "detects plain text files" do
-      path = "/workspace/spec/tmp_text___util.txt"
+      # Use a temporary directory that we can actually create
+      tmp_dir = Dir.mktmpdir
+      path = File.join(tmp_dir, "tmp_text___util.txt")
       File.write(path, "hello\nworld\n", encoding: "UTF-8")
       expect(described_class.text_file?(path)).to be(true)
     ensure
-      File.delete(path) if File.exist?(path)
+      File.delete(path) if path && File.exist?(path)
+      FileUtils.rm_rf(tmp_dir) if defined?(tmp_dir) && tmp_dir && Dir.exist?(tmp_dir)
     end
 
     it "detects binary-ish files" do
-      path = "/workspace/spec/tmp_bin___util.bin"
-      File.binwrite(path, ("\x00" * 512))
+      # Use a temporary directory that we can actually create
+      tmp_dir = Dir.mktmpdir
+      path = File.join(tmp_dir, "tmp_bin___util.bin")
+      File.binwrite(path, "\x00" * 512)
       expect(described_class.text_file?(path)).to be(false)
     ensure
-      File.delete(path) if File.exist?(path)
+      File.delete(path) if path && File.exist?(path)
+      FileUtils.rm_rf(tmp_dir) if defined?(tmp_dir) && tmp_dir && Dir.exist?(tmp_dir)
     end
   end
 end
-

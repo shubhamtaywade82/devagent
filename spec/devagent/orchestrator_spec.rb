@@ -100,6 +100,9 @@ RSpec.describe Devagent::Orchestrator do
     before do
       allow(planner).to receive(:plan).and_return(plan)
       allow(Devagent::DecisionEngine).to receive(:new).and_return(instance_double(Devagent::DecisionEngine, decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 }))
+      # Mock File.exist? to allow plan validation to pass
+      allow(File).to receive(:exist?).and_call_original
+      allow(File).to receive(:exist?).with("/workspace/lib/devagent/version.rb").and_return(true)
     end
 
     it "executes a plan and runs tests when changes are made" do
@@ -279,12 +282,18 @@ RSpec.describe Devagent::Orchestrator do
     end
 
     it "rejects broad file listing requests and lists allowed directories" do
+      # Mock directory existence and structure for allowed directories
+      allow(Dir).to receive(:exist?).and_call_original
+      allow(Dir).to receive(:exist?).with("/workspace/lib").and_return(true)
+      allow(Dir).to receive(:exist?).with("/workspace/spec").and_return(true)
+
       orchestrator = described_class.new(context, output: output)
+      allow(orchestrator).to receive(:get_directory_structure).and_return("file1.rb\nfile2.rb")
 
       orchestrator.run("list all files in this repository")
 
       expect(streamer).to have_received(:say).with(a_string_matching(/Clarification needed/i), hash_including(level: :warn))
-      expect(streamer).to have_received(:say).with(a_string_matching(/Files from allowed directories:/), anything)
+      expect(streamer).to have_received(:say).with(a_string_matching(/Files from allowed directories/), anything)
       expect(index).not_to have_received(:build!)
     end
 
