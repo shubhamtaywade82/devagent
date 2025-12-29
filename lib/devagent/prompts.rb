@@ -45,7 +45,9 @@ module Devagent
       - Never assume file contents without reading.
       - If uncertain, add assumptions explicitly.
       - If task is impossible, return an empty steps array and explain in assumptions.
-      - CRITICAL: ALWAYS set confidence to a reasonable value (0.5-1.0). NEVER set confidence to 0 or below 0.3.
+      - CRITICAL: ALWAYS set confidence to a value >= 0.6 unless you are truly BLOCKED.
+      - Plans with confidence < 0.5 will be rejected by the controller.
+      - NEVER set confidence to 0 unless the task is BLOCKED / impossible.
       - Simple tasks (add comment, read file, run test) should have HIGH confidence (0.8-1.0).
       - Medium tasks should have confidence 0.6-0.8.
       - Complex tasks should have confidence 0.5-0.7.

@@ -187,6 +187,7 @@ module Devagent
           begin
             validate_plan!(state, plan, visible_tools: visible_tools)
           rescue StandardError => e
+            streamer.say("PLAN_REJECTED: #{e.message}", level: :warn) unless quiet?
             # If validation fails for a command-checking question, try fallback
             if question_requires_command?(task)
               streamer.say("Plan validation failed. Trying fallback plan...", level: :warn) unless quiet?
@@ -824,11 +825,6 @@ module Devagent
         raise Error, "too many reads in first plan" if reads > 1
       end
 
-      fp = fingerprint_plan(plan)
-      raise Error, "plan repeated without progress" if state.plan_fingerprints.include?(fp)
-
-      state.plan_fingerprints << fp
-
       # Enforce: every fs.write depends on a prior fs.read of the same path.
       reads = {}
       plan.steps.each do |s|
@@ -843,6 +839,11 @@ module Devagent
         dep_paths = deps.filter_map { |id| reads[id] }
         raise Error, "fs.write must depend_on prior fs.read of same path (#{path})" unless dep_paths.include?(path)
       end
+
+      # Only fingerprint AFTER all validation checks pass.
+      fp = fingerprint_plan(plan)
+      raise Error, "plan repeated without progress" if state.plan_fingerprints.include?(fp)
+      state.plan_fingerprints << fp
     end
 
     def fingerprint_plan(plan)

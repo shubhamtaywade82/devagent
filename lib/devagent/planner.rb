@@ -23,16 +23,19 @@ module Devagent
   class Planner
     PLAN_SCHEMA_V2 = {
       "type" => "object",
-      "required" => %w[plan_id goal assumptions steps success_criteria rollback_strategy confidence],
+      # NOTE: keep schema permissive for local models; controller performs strict validation later.
+      "required" => %w[plan_id assumptions steps success_criteria rollback_strategy confidence],
       "properties" => {
         "plan_id" => { "type" => "string" },
-        "goal" => { "type" => "string" },
+        "goal" => { "type" => %w[string null] },
+        "summary" => { "type" => %w[string null] },
         "assumptions" => { "type" => "array", "items" => { "type" => "string" } },
         "steps" => {
           "type" => "array",
           "items" => {
             "type" => "object",
-            "required" => %w[step_id action path command reason depends_on],
+            # path/command/content are tool-specific; do not require them at schema-level.
+            "required" => %w[step_id action reason depends_on],
             "properties" => {
               "step_id" => { "type" => "integer", "minimum" => 1 },
               "action" => { "type" => "string" },

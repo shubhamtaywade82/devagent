@@ -1,4 +1,11 @@
-model: "codellama"
+provider: ollama
+# Default models (Ollama)
+#
+# For best results, use code-specific instruct models for planner/developer.
+model: "qwen2.5-coder:7b-instruct"
+planner_model: "qwen2.5-coder:7b-instruct"
+developer_model: "qwen2.5-coder:7b-instruct"
+reviewer_model: "llama3.1:8b-instruct"
 auto:
   max_iterations: 3
   dry_run: false
