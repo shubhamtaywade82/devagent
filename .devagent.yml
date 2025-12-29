@@ -1,22 +1,22 @@
 provider: ollama
 # Default models (Ollama)
-# Model recommendations for devagent:
 #
-# BEST FOR CODE GENERATION & STRUCTURED OUTPUTS:
-# - deepseek-coder:6.7b (excellent for code, JSON, diffs) - RECOMMENDED
-# - codellama:7b-instruct (Meta's code model, good for structured outputs)
-# - qwen2.5-coder:7b (good instruction following, code-focused)
+# BENCHMARK RESULTS (see script/benchmark_models.rb):
+# 🥇 qwen2.5-coder:1.5b - 4/4 score, 0.57s latency (FASTEST + RELIABLE) - RECOMMENDED
+# 🥈 qwen2.5-coder:7b-instruct-q5_K_M - 3/4 score, 4.6s latency (BEST QUALITY)
+# 🥉 llama3.1:8b-instruct-q4_K_M - 3/4 score, 4.8s latency (STRONG BACKUP)
+# ⚠️  starcoder2:3b - 1/4 score, timeout issues (AVOID)
 #
-# GOOD ALTERNATIVES:
-# - mistral:7b-instruct (excellent instruction following, good for planning)
-# - llama3.1:8b-instruct (balanced, but not code-specific)
-# - llama3.2:3b (TOO SMALL - avoid for planning/diff generation)
+# MODEL SELECTION STRATEGY:
+# - Speed tasks (chat, explain, quick edits): qwen2.5-coder:1.5b
+# - Quality tasks (agent mode, refactors, multi-file): qwen2.5-coder:7b-instruct-q5_K_M
+# - Heavy tasks (complex migrations): llama3.1:8b-instruct-q4_K_M
 #
 # For best results, use code-specific models for developer_model and planner_model
-model: "deepseek-coder:6.7b" # Code-focused model, excellent for structured outputs
-planner_model: "deepseek-coder:6.7b" # Code models handle JSON/structured planning well
-developer_model: "deepseek-coder:6.7b" # Code models generate better diffs
-reviewer_model: "mistral:7b-instruct" # Good for code review and analysis (available)
+model: "qwen2.5-coder:1.5b" # Benchmark winner: fastest + reliable (4/4 score, 0.57s)
+planner_model: "qwen2.5-coder:1.5b" # Fast JSON/structured planning
+developer_model: "qwen2.5-coder:7b-instruct-q5_K_M" # Quality model for code generation (3/4 score)
+reviewer_model: "mistral:7b-instruct" # Good for code review and analysis
 embed_model: "nomic-embed-text:latest" # Embedding model (use :latest tag for latest version)
 
 # OpenAI models (use with --provider openai)

@@ -6,15 +6,40 @@ require "net/http"
 require "uri"
 require_relative "../lib/devagent/ollama"
 
+# Default models - update these to match your installed Ollama models
+# Check available models with: curl -s http://localhost:11434/api/tags | jq -r '.models[]?.name'
 DEFAULT_MODELS = [
-  "qwen2.5-coder:7b-instruct",
-  "llama3.1:8b-instruct",
-  "deepseek-coder:6.7b-instruct",
+  "qwen2.5-coder:7b",              # Note: may be installed as qwen2.5-coder:7b-instruct-q5_K_M
+  "llama3.1:8b-instruct-q4_K_M",   # Note: may be installed as llama3.1:8b-instruct
+  "deepseek-coder:6.7b",            # Note: may be installed as deepseek-coder:6.7b-instruct
   "mistral:7b-instruct"
 ].freeze
 
-MODELS =
-  ENV.fetch("MODELS", "").strip.empty? ? DEFAULT_MODELS : ENV.fetch("MODELS").split(",").map(&:strip).reject(&:empty?)
+# Get models from environment variable, or auto-detect from Ollama, or use defaults
+def get_models_to_benchmark(ollama_host)
+  # If MODELS env var is set, use that
+  env_models = ENV.fetch("MODELS", "").strip
+  return env_models.split(",").map(&:strip).reject(&:empty?) unless env_models.empty?
+
+  # Otherwise, try to auto-detect from Ollama
+  begin
+    uri = URI(ollama_host)
+    tags_uri = URI.join(uri.to_s, "/api/tags")
+    res = Net::HTTP.get_response(tags_uri)
+    if res.is_a?(Net::HTTPSuccess)
+      data = JSON.parse(res.body)
+      models = Array(data["models"]).map { |m| m["name"] }.compact
+      # Filter out embedding models (they're not suitable for generation benchmarks)
+      models = models.reject { |m| m.include?("embed") || m.include?("embedding") }
+      return models unless models.empty?
+    end
+  rescue StandardError => e
+    warn "Warning: Could not auto-detect models from Ollama: #{e.message}"
+  end
+
+  # Fallback to defaults
+  DEFAULT_MODELS
+end
 
 DEFAULT_PARAMS = {
   temperature: 0,
@@ -124,6 +149,17 @@ rescue StandardError => e
   exit 2
 end
 
+# Get models to benchmark (auto-detect or use defaults)
+MODELS = get_models_to_benchmark(ollama_host)
+
+if MODELS.empty?
+  warn "ERROR: No models found to benchmark"
+  exit 2
+end
+
+puts "Found #{MODELS.size} model(s) to benchmark: #{MODELS.join(', ')}"
+puts ""
+
 client = Devagent::Ollama::Client.new("host" => ollama_host)
 results = {}
 
@@ -147,9 +183,10 @@ MODELS.each do |model|
       format: BENCHMARKS[:json_schema][:schema]
     )
     score[:json_schema] = schema_obedient?(res) ? 1 : 0
-  rescue StandardError
+  rescue StandardError => e
     score[:json_schema] = 0
-    score[:errors][:json_schema] = "request_failed"
+    score[:errors][:json_schema] = e.message
+    warn "  JSON schema test failed: #{e.message}"
   end
 
   # 2) Diff discipline
@@ -160,9 +197,10 @@ MODELS.each do |model|
       params: DEFAULT_PARAMS.merge(num_predict: 220)
     )
     score[:diff_discipline] = diff_disciplined?(res) ? 1 : 0
-  rescue StandardError
+  rescue StandardError => e
     score[:diff_discipline] = 0
-    score[:errors][:diff_discipline] = "request_failed"
+    score[:errors][:diff_discipline] = e.message
+    warn "  Diff discipline test failed: #{e.message}"
   end
 
   # 3) Stability / hallucination resistance
@@ -173,9 +211,10 @@ MODELS.each do |model|
       params: DEFAULT_PARAMS.merge(num_predict: 16)
     )
     score[:stability] = stable_non_hallucinating?(res) ? 1 : 0
-  rescue StandardError
+  rescue StandardError => e
     score[:stability] = 0
-    score[:errors][:stability] = "request_failed"
+    score[:errors][:stability] = e.message
+    warn "  Stability test failed: #{e.message}"
   end
 
   # 4) Latency (local usability)
@@ -189,10 +228,11 @@ MODELS.each do |model|
     end
     score[:latency] = time < LATENCY_THRESHOLD_SECONDS ? 1 : 0
     score[:latency_seconds] = time.round(3)
-  rescue StandardError
+  rescue StandardError => e
     score[:latency] = 0
     score[:latency_seconds] = nil
-    score[:errors][:latency] = "request_failed"
+    score[:errors][:latency] = e.message
+    warn "  Latency test failed: #{e.message}"
   end
 
   score[:total] = score.values_at(:json_schema, :diff_discipline, :stability, :latency).sum
