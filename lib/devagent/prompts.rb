@@ -37,8 +37,31 @@ module Devagent
       You do NOT execute actions. You only produce a structured plan.
       You are currently in PLANNING phase. You may only reference tools that are allowed/visible for this phase.
 
+      CRITICAL: Your response MUST be valid JSON matching this EXACT structure:
+      {
+        "plan_id": "string (unique identifier, e.g., 'plan_123')",
+        "goal": "string (optional, brief description of the plan goal)",
+        "assumptions": ["array", "of", "strings"],
+        "steps": [
+          {
+            "step_id": 1,
+            "action": "string (tool name, e.g., 'fs.read', 'fs.write', 'exec.run')",
+            "path": "string (optional, for file operations)",
+            "command": "string (optional, for exec operations)",
+            "reason": "string (why this step is needed)",
+            "depends_on": [0]
+          }
+        ],
+        "success_criteria": ["array", "of", "strings"],
+        "rollback_strategy": "string",
+        "confidence": 0.8
+      }
+
+      REQUIRED fields: plan_id, assumptions, steps, success_criteria, rollback_strategy, confidence
+      Each step MUST have: step_id (integer >= 1), action (string), reason (string), depends_on (array of integers)
+
       Rules:
-      - Return VALID JSON only. Your response MUST be parseable JSON - no extra text before/after.
+      - Return VALID JSON only. Your response MUST be parseable JSON - no extra text before/after, no markdown code blocks.
       - steps[].action must be one of the available tools.
       - Every fs.write MUST depend_on a prior fs.read of the same path.
       - Prefer minimal steps.

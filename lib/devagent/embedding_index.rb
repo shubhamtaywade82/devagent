@@ -38,12 +38,12 @@ module Devagent
 
     def build!
       chunks = enumerate_chunks
-      return [] if chunks.empty?
+      return [] if chunks.nil? || chunks.empty?
 
       embeddings = []
       chunk_texts = chunks.map { |chunk| chunk[:text] }
       vectors = embed_many(chunk_texts)
-      return [] if vectors.empty?
+      return [] if vectors.nil? || vectors.empty?
 
       vector_dim = Array(vectors.first).size
       ensure_dimension_consistency!(vector_dim)
@@ -81,7 +81,8 @@ module Devagent
     end
 
     def document_count
-      store.all.size
+      entries = store.all
+      entries.nil? ? 0 : entries.size
     end
 
     def retrieve(query, limit: 8)
@@ -143,13 +144,36 @@ module Devagent
 
     def target_files
       globs = Array(config["globs"])
-      globs.flat_map do |pattern|
+      files = globs.flat_map do |pattern|
         Dir.glob(File.join(repo_path, pattern), File::FNM_EXTGLOB)
       end
            .uniq
            .reject { |path| File.directory?(path) }
-           .select { |path| Util.text_file?(path) }
-           .map { |path| relative_path(path) }
+                   .select { |path| Util.text_file?(path) }
+                   .map { |path| relative_path(path) }
+
+      # Filter by allowlist/denylist if available in context config
+      if context.respond_to?(:config)
+        auto_config = context.config["auto"] || {}
+        allowlist = Array(auto_config["allowlist"])
+        denylist = Array(auto_config["denylist"])
+
+        # Apply denylist first (more restrictive)
+        unless denylist.empty?
+          files = files.reject do |file_path|
+            denylist.any? { |pattern| File.fnmatch?(pattern, file_path, File::FNM_PATHNAME | File::FNM_EXTGLOB) }
+          end
+        end
+
+        # Apply allowlist if present (only include matching files)
+        unless allowlist.empty?
+          files = files.select do |file_path|
+            allowlist.any? { |pattern| File.fnmatch?(pattern, file_path, File::FNM_PATHNAME | File::FNM_EXTGLOB) }
+          end
+        end
+      end
+
+      files
     end
 
     def relative_path(path)

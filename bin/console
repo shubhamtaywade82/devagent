@@ -15,24 +15,585 @@ module PhaseInspector
     @context
   end
 
+  # Test only the Classifying (Intent Classification) phase
+  def test_classifying(task = nil)
+    ctx = setup_context
+
+    if task.nil?
+      puts "Usage: test_classifying('your task here')"
+      puts "Example: test_classifying('add a function to calculate factorial')"
+      return
+    end
+
+    puts "=" * 60
+    puts "Testing Intent Classification (Classifying Phase)"
+    puts "=" * 60
+    puts "Task: #{task}"
+    puts ""
+
+    classifier = Devagent::IntentClassifier.new(ctx)
+
+    # Capture raw response
+    raw_response = nil
+    original_query = ctx.method(:query)
+    ctx.define_singleton_method(:query) do |role:, prompt:, stream: false, **kwargs|
+      result = original_query.call(role: role, prompt: prompt, stream: stream, **kwargs)
+      raw_response = result.to_s if role == :developer && !stream
+      result
+    end
+
+    begin
+      puts "Running classification..."
+      result = classifier.classify(task)
+
+      puts ""
+      puts "✅ Classification Result:"
+      puts "-" * 60
+      puts "  Intent: #{result["intent"]}"
+      puts "  Confidence: #{(result["confidence"].to_f * 100).round(1)}%"
+      puts ""
+
+      if raw_response
+        puts "📋 Raw LLM Response:"
+        puts "-" * 60
+        begin
+          require "json"
+          parsed = JSON.parse(raw_response)
+          puts JSON.pretty_generate(parsed)
+        rescue JSON::ParserError
+          puts raw_response
+        end
+        puts ""
+        puts "Response length: #{raw_response.length} characters"
+      end
+
+      puts ""
+      puts "Model used: #{ctx.model_for(:developer)}"
+      puts "Provider: #{ctx.provider_for(:developer)}"
+
+      result
+    ensure
+      ctx.define_singleton_method(:query, original_query)
+    end
+  end
+
+  # Test only the Indexing phase
+  def test_indexing(rebuild: false)
+    ctx = setup_context
+
+    puts "=" * 60
+    puts "Testing Indexing Phase"
+    puts "=" * 60
+    puts ""
+
+    index = ctx.index
+
+    # Show current index status
+    puts "📊 Current Index Status:"
+    puts "-" * 60
+    metadata = index.metadata
+    if metadata && !metadata.empty?
+      puts "  Provider: #{metadata["provider"]}"
+      puts "  Model: #{metadata["model"]}"
+      puts "  Dimension: #{metadata["dim"]}"
+      puts "  Documents: #{index.document_count}"
+    else
+      puts "  (No index exists yet)"
+    end
+    puts ""
+
+    # Show embedding backend info
+    puts "🔧 Embedding Backend:"
+    puts "-" * 60
+    backend_info = ctx.embedding_backend_info
+    puts "  Provider: #{backend_info["provider"]}"
+    puts "  Model: #{ctx.model_for(:embedding)}"
+    puts "  Dimension: #{backend_info["dim"] || "unknown"}"
+    puts ""
+
+    # Show index configuration
+    puts "⚙️  Index Configuration:"
+    puts "-" * 60
+    config = ctx.config["index"] || {}
+    defaults = Devagent::EmbeddingIndex::DEFAULTS
+    puts "  Globs: #{config["globs"] || defaults["globs"]}"
+    puts "  Chunk size: #{config["chunk_size"] || defaults["chunk_size"]}"
+    puts "  Overlap: #{config["overlap"] || defaults["overlap"]}"
+    puts "  Threads: #{config["threads"] || defaults["threads"]}"
+    puts ""
+
+    # Check if rebuild is needed
+    if metadata && !metadata.empty?
+      needs_rebuild = metadata["provider"] != backend_info["provider"] ||
+                      metadata["model"] != ctx.model_for(:embedding) ||
+                      (metadata["dim"] && backend_info["dim"] && metadata["dim"] != backend_info["dim"])
+
+      if needs_rebuild && !rebuild
+        puts "⚠️  Index backend changed. Use test_indexing(rebuild: true) to rebuild."
+        puts ""
+        return
+      end
+    end
+
+    # Show files that will be indexed
+    puts "📁 Files to Index:"
+    puts "-" * 60
+    # Access private method via reflection
+    files = index.send(:target_files)
+    if files.empty?
+      puts "  (No files found matching globs)"
+    else
+      puts "  Found #{files.size} files:"
+      files.first(20).each do |file|
+        puts "    - #{file}"
+      end
+      puts "    ... (#{files.size - 20} more)" if files.size > 20
+    end
+    puts ""
+
+    # Run indexing
+    puts "🔄 Building index..."
+    puts "-" * 60
+    start_time = Time.now
+
+    begin
+      embeddings = index.build!
+      elapsed = Time.now - start_time
+
+      puts ""
+      puts "✅ Indexing Complete!"
+      puts "-" * 60
+      puts "  Files processed: #{files.size}"
+      puts "  Chunks created: #{embeddings.size}"
+      puts "  Time elapsed: #{elapsed.round(2)}s"
+      puts "  Documents in store: #{index.document_count}"
+      puts ""
+
+      # Show sample chunks
+      if embeddings.any?
+        puts "📝 Sample Chunks (first 3):"
+        puts "-" * 60
+        embeddings.first(3).each_with_index do |entry, idx|
+          puts "  Chunk #{idx + 1}:"
+          puts "    Path: #{entry.path}"
+          puts "    Chunk index: #{entry.chunk_index}"
+          text_preview = entry.text[0..100]
+          puts "    Text preview: #{text_preview}#{"..." if entry.text.length > 100}"
+          puts "    Embedding dimension: #{entry.embedding.size}"
+          puts ""
+        end
+      end
+
+      # Test retrieval
+      puts "🔍 Testing Retrieval:"
+      puts "-" * 60
+      test_query = "function method class"
+      results = index.retrieve(test_query, limit: 3)
+      if results.any?
+        puts "  Query: '#{test_query}'"
+        puts "  Found #{results.size} results:"
+        results.each_with_index do |result, idx|
+          puts "    #{idx + 1}. #{result["path"]} (chunk #{result["chunk_index"]})"
+          text_preview = result["text"][0..80]
+          puts "       #{text_preview}#{"..." if result["text"].length > 80}"
+        end
+      else
+        puts "  (No results found)"
+      end
+    rescue StandardError => e
+      puts ""
+      puts "❌ Indexing Failed:"
+      puts "-" * 60
+      puts "  Error: #{e.class}: #{e.message}"
+      puts "  Backtrace:"
+      e.backtrace.first(5).each { |line| puts "    #{line}" }
+    end
+
+    puts ""
+    puts "=" * 60
+  end
+
+  # Test only the Planning phase
+  def test_planning(task = nil, build_index: false)
+    ctx = setup_context
+
+    if task.nil?
+      puts "Usage: test_planning('your task here')"
+      puts "Example: test_planning('add a factorial function to lib/math.rb')"
+      puts ""
+      puts "Options:"
+      puts "  build_index: true  - Build index before planning (default: true)"
+      return
+    end
+
+    puts "=" * 60
+    puts "Testing Planning Phase"
+    puts "=" * 60
+    puts "Task: #{task}"
+    puts ""
+
+    # Show expected schema format
+    puts "📋 Expected Plan Schema:"
+    puts "-" * 60
+    puts "  Required top-level fields:"
+    puts "    - plan_id: string (unique identifier)"
+    puts "    - assumptions: array of strings"
+    puts "    - steps: array of step objects"
+    puts "    - success_criteria: array of strings"
+    puts "    - rollback_strategy: string"
+    puts "    - confidence: number (0.0 to 1.0)"
+    puts "    - goal: string (optional)"
+    puts ""
+    puts "  Each step must have:"
+    puts "    - step_id: integer (>= 1)"
+    puts "    - action: string (e.g., 'fs.read', 'fs.write', 'exec.run')"
+    puts "    - reason: string (why this step is needed)"
+    puts "    - depends_on: array of integers (step IDs this depends on)"
+    puts "    - path: string (optional, for file operations)"
+    puts "    - command: string (optional, for exec operations)"
+    puts ""
+    puts "  Example valid plan structure:"
+    example_plan = {
+      "plan_id" => "plan_123",
+      "goal" => "Read README.md",
+      "assumptions" => ["README.md exists"],
+      "steps" => [
+        {
+          "step_id" => 1,
+          "action" => "fs.read",
+          "path" => "README.md",
+          "reason" => "Read the README file to understand the repository",
+          "depends_on" => []
+        }
+      ],
+      "success_criteria" => ["README.md is read successfully"],
+      "rollback_strategy" => "No rollback needed for read operation",
+      "confidence" => 0.9
+    }
+    require "json"
+    puts JSON.pretty_generate(example_plan)
+    puts ""
+
+    # Build index if requested
+    if build_index
+      index = ctx.index
+      metadata = index.metadata
+      backend_info = ctx.embedding_backend_info
+
+      # Check if index needs rebuilding
+      needs_rebuild = if metadata && !metadata.empty?
+                        # Check if backend changed
+                        metadata["provider"] != backend_info["provider"] ||
+                          metadata["model"] != ctx.model_for(:embedding) ||
+                          (metadata["dim"] && backend_info["dim"] && metadata["dim"] != backend_info["dim"])
+                      else
+                        # No index exists
+                        true
+                      end
+
+      if needs_rebuild
+        puts "Building index (index missing or backend changed)..."
+        index.build!
+        puts "Index ready (#{index.document_count} documents)"
+      else
+        puts "Using existing index (#{index.document_count} documents)"
+        puts "  Provider: #{metadata["provider"]}, Model: #{metadata["model"]}"
+      end
+      puts ""
+    end
+
+    planner = Devagent::Planner.new(ctx)
+
+    # Capture raw responses
+    raw_planning_responses = []
+    raw_review_responses = []
+
+    # Intercept context.query to capture planning and review responses
+    original_query = ctx.method(:query)
+    ctx.define_singleton_method(:query) do |role:, prompt:, stream: false, **kwargs|
+      result = original_query.call(role: role, prompt: prompt, stream: stream, **kwargs)
+
+      unless stream
+        case role
+        when :planner
+          raw_planning_responses << result.to_s
+        when :reviewer
+          raw_review_responses << result.to_s
+        end
+      end
+
+      result
+    end
+
+    begin
+      puts "Running planning..."
+      puts ""
+
+      plan = planner.plan(task)
+
+      puts "✅ Planning Result:"
+      puts "-" * 60
+      puts "  Plan ID: #{plan.plan_id}"
+      puts "  Goal: #{plan.goal || "(empty)"}"
+      puts "  Confidence: #{(plan.confidence.to_f * 100).round(1)}%"
+      puts "  Steps: #{plan.steps.size}"
+      puts ""
+
+      if plan.steps.any?
+        puts "📋 Plan Steps:"
+        puts "-" * 60
+        plan.steps.each_with_index do |step, idx|
+          puts "  #{idx + 1}. Step #{step["step_id"]}: #{step["action"]}"
+          puts "     Path: #{step["path"]}" if step["path"]
+          puts "     Command: #{step["command"]}" if step["command"]
+          puts "     Reason: #{step["reason"]}" if step["reason"]
+          puts "     Depends on: #{step["depends_on"]}" if step["depends_on"] && !step["depends_on"].empty?
+        end
+        puts ""
+      end
+
+      if plan.assumptions && !plan.assumptions.empty?
+        puts "💭 Assumptions:"
+        puts "-" * 60
+        plan.assumptions.each { |a| puts "  - #{a}" }
+        puts ""
+      end
+
+      if plan.success_criteria && !plan.success_criteria.empty?
+        puts "✅ Success Criteria:"
+        puts "-" * 60
+        plan.success_criteria.each { |c| puts "  - #{c}" }
+        puts ""
+      end
+
+      if plan.rollback_strategy && !plan.rollback_strategy.empty?
+        puts "🔄 Rollback Strategy:"
+        puts "-" * 60
+        puts "  #{plan.rollback_strategy}"
+        puts ""
+      end
+
+      # Helper to strip markdown code blocks
+      strip_markdown = lambda do |text|
+        text.to_s
+            .gsub(/^```(?:json|ruby|javascript|typescript|python|java|go|rust|php|markdown|yaml|text)?\s*\n/, "")
+            .gsub(/\n```\s*$/, "")
+            .strip
+      end
+
+      # Show raw planning responses
+      if raw_planning_responses.any?
+        puts "📝 Raw Planning Responses (#{raw_planning_responses.size}):"
+        puts "-" * 60
+        raw_planning_responses.each_with_index do |response, idx|
+          puts "Planning Attempt #{idx + 1}:"
+          cleaned_response = strip_markdown.call(response)
+          begin
+            require "json"
+            require "json-schema"
+            parsed = JSON.parse(cleaned_response)
+            puts "  ✅ Valid JSON after cleaning markdown"
+
+            # Check schema validation
+            schema = Devagent::Planner::PLAN_SCHEMA_V2
+            begin
+              JSON::Validator.validate!(schema, parsed)
+              puts "  ✅ Schema validation: PASSED"
+            rescue JSON::Schema::ValidationError => e
+              puts "  ❌ Schema validation: FAILED"
+              puts "    Error: #{e.message}"
+              puts ""
+              puts "  Schema Requirements:"
+              puts "    Required fields: plan_id, assumptions, steps, success_criteria, rollback_strategy, confidence"
+              puts "    Each step requires: step_id, action, reason, depends_on"
+              puts ""
+              puts "  What was received:"
+              puts "    - plan_id: #{parsed["plan_id"] ? "✓ present" : "✗ missing"}"
+              puts "    - goal: #{parsed["goal"] ? "✓ present" : "✗ missing (optional)"}"
+              puts "    - assumptions: #{parsed["assumptions"] ? "✓ present (#{parsed["assumptions"].size} items)" : "✗ missing"}"
+              puts "    - steps: #{parsed["steps"] ? "✓ present (#{parsed["steps"].size} steps)" : "✗ missing"}"
+              puts "    - success_criteria: #{parsed["success_criteria"] ? "✓ present (#{parsed["success_criteria"].size} items)" : "✗ missing"}"
+              puts "    - rollback_strategy: #{parsed["rollback_strategy"] ? "✓ present" : "✗ missing"}"
+              puts "    - confidence: #{parsed["confidence"] ? "✓ present" : "✗ missing"}"
+              puts ""
+              if parsed["steps"] && parsed["steps"].any?
+                puts "  Step structure analysis:"
+                parsed["steps"].first(3).each_with_index do |step, step_idx|
+                  puts "    Step #{step_idx + 1}:"
+                  puts "      - step_id: #{step["step_id"] ? "✓" : "✗ MISSING"}"
+                  puts "      - action: #{step["action"] ? "✓ (#{step["action"]})" : "✗ MISSING"}"
+                  puts "      - reason: #{step["reason"] ? "✓" : "✗ MISSING"}"
+                  puts "      - depends_on: #{step["depends_on"] ? "✓" : "✗ MISSING"}"
+                  puts "      - path: #{step["path"] ? "✓" : "✗ (optional)"}"
+                  puts "      - command: #{step["command"] ? "✓" : "✗ (optional)"}"
+                  # Show unexpected fields
+                  unexpected = step.keys - %w[step_id action path command content reason depends_on
+                                              accepted_exit_codes allow_failure inputs outputs]
+                  puts "      - Unexpected fields: #{unexpected.join(", ")}" if unexpected.any?
+                end
+              end
+            end
+
+            puts ""
+            puts "  Parsed Plan Structure:"
+            puts "    - plan_id: #{parsed["plan_id"] || "(empty)"}"
+            puts "    - goal: #{parsed["goal"] || parsed["summary"] || "(empty)"}"
+            puts "    - confidence: #{parsed["confidence"]}"
+            puts "    - steps: #{parsed["steps"] ? parsed["steps"].size : 0} steps"
+            puts "    - assumptions: #{parsed["assumptions"] ? parsed["assumptions"].size : 0} items"
+            puts "    - success_criteria: #{parsed["success_criteria"] ? parsed["success_criteria"].size : 0} items"
+            puts ""
+            puts "  Full JSON (first 800 chars):"
+            puts "  #{cleaned_response[0..800]}..."
+            puts "  ... (total: #{cleaned_response.length} chars)"
+          rescue JSON::ParserError => e
+            puts "  ❌ JSON parsing failed: #{e.message}"
+            puts ""
+            puts "  Raw response (first 500 chars):"
+            puts "  #{response[0..500]}..."
+            puts ""
+            puts "  Cleaned response (first 500 chars):"
+            puts "  #{cleaned_response[0..500]}..."
+          end
+          puts ""
+        end
+      end
+
+      # Show raw review responses
+      if raw_review_responses.any?
+        puts "🔍 Raw Review Responses (#{raw_review_responses.size}):"
+        puts "-" * 60
+        raw_review_responses.each_with_index do |response, idx|
+          puts "Review #{idx + 1}:"
+          cleaned_response = strip_markdown.call(response)
+          begin
+            require "json"
+            require "json-schema"
+            # Try to extract just the JSON part if there's extra text
+            json_match = cleaned_response.match(/\{.*\}/m)
+            json_text = json_match ? json_match[0] : cleaned_response
+
+            parsed = JSON.parse(json_text)
+            puts "  ✅ Valid JSON after cleaning markdown"
+
+            # Check schema validation
+            schema = Devagent::Planner::REVIEW_SCHEMA
+            begin
+              JSON::Validator.validate!(schema, parsed)
+              puts "  ✅ Schema validation: PASSED"
+            rescue JSON::Schema::ValidationError => e
+              puts "  ❌ Schema validation: FAILED"
+              puts "    Error: #{e.message}"
+            end
+
+            puts "  Approved: #{parsed["approved"]}"
+            puts "  Issues: #{parsed["issues"]&.size || 0}"
+            parsed["issues"].each { |issue| puts "    - #{issue}" } if parsed["issues"] && !parsed["issues"].empty?
+            puts ""
+            puts "  Full JSON:"
+            puts JSON.pretty_generate(parsed)
+
+            # Show if there was extra text after JSON
+            if json_match && cleaned_response.length > json_match.end(0)
+              extra_text = cleaned_response[json_match.end(0)..-1].strip
+              unless extra_text.empty?
+                puts ""
+                puts "  ⚠️  Extra text after JSON (ignored by parser):"
+                puts "  #{extra_text[0..200]}..."
+              end
+            end
+          rescue JSON::ParserError => e
+            puts "  ❌ JSON parsing failed: #{e.message}"
+            puts ""
+            puts "  Raw response:"
+            puts "  #{response}"
+            puts ""
+            puts "  Cleaned response:"
+            puts "  #{cleaned_response}"
+            puts ""
+            puts "  💡 Tip: The reviewer may have added explanatory text after the JSON."
+            puts "     Try extracting just the JSON object from the response."
+          end
+          puts ""
+        end
+      end
+
+      puts "🔧 Configuration:"
+      puts "-" * 60
+      puts "  Planner Model: #{ctx.model_for(:planner)}"
+      puts "  Reviewer Model: #{ctx.model_for(:reviewer)}"
+      puts "  Provider: #{ctx.provider_for(:planner)}"
+      puts ""
+
+      if plan.confidence.to_f < 0.3
+        puts "⚠️  WARNING: Low confidence detected!"
+        puts "  This plan will likely be rejected or trigger fallback logic."
+        puts ""
+      end
+
+      plan
+    ensure
+      ctx.define_singleton_method(:query, original_query)
+    end
+  end
+
   # Create a tracking orchestrator that exposes state and tracks phase transitions
   def create_tracking_orchestrator
     ctx = setup_context
 
     # Create a custom orchestrator that tracks and exposes state
     Class.new(Devagent::Orchestrator) do
-      attr_reader :last_state, :phase_history
+      attr_reader :last_state, :phase_history, :raw_responses
 
       def initialize(context, output: $stdout, ui: nil)
         super
         @phase_history = []
         @last_state = nil
+        @raw_responses = {
+          intent: nil,
+          planning: [],
+          review: []
+        }
       end
 
       def run(task)
         @phase_history = []
+        @raw_responses = {
+          intent: nil,
+          planning: [],
+          review: [],
+          developer: [],
+          decision: []
+        }
         state_created = nil
         phase_history_ref = @phase_history # Capture in closure
+        raw_responses_ref = @raw_responses # Capture in closure
+        context_ref = context # Capture context in closure
+
+        # Intercept context.query to capture all LLM responses
+        original_query = context_ref.method(:query)
+        context_ref.define_singleton_method(:query) do |role:, prompt:, stream: false, **kwargs|
+          result = original_query.call(role: role, prompt: prompt, stream: stream, **kwargs)
+
+          # Capture non-streaming responses organized by role
+          unless stream
+            case role
+            when :developer
+              # Intent classification uses :developer role
+              if raw_responses_ref[:intent].nil? && prompt.include?("INTENT_SYSTEM")
+                raw_responses_ref[:intent] = result.to_s
+              else
+                raw_responses_ref[:developer] << result.to_s
+              end
+            when :planner
+              raw_responses_ref[:planning] << result.to_s
+            when :reviewer
+              raw_responses_ref[:review] << result.to_s
+            end
+          end
+
+          result
+        end
 
         # Intercept state creation by overriding AgentState.initial temporarily
         original_method = Devagent::AgentState.method(:initial)
@@ -76,8 +637,9 @@ module PhaseInspector
 
           result
         ensure
-          # Restore original method
+          # Restore original methods
           Devagent::AgentState.define_singleton_method(:initial, original_method)
+          context_ref.define_singleton_method(:query, original_query)
         end
 
         # Return state for inspection
@@ -346,6 +908,105 @@ module PhaseInspector
     puts "=" * 60
   end
 
+  # Show raw LLM responses captured during execution
+  def show_raw_responses(orchestrator, limit: 500)
+    unless orchestrator.respond_to?(:raw_responses)
+      puts "No raw responses available. Use create_tracking_orchestrator first."
+      return
+    end
+
+    responses = orchestrator.raw_responses
+    puts "=" * 60
+    puts "Raw LLM Responses"
+    puts "=" * 60
+    puts ""
+
+    # Intent Classification
+    if responses[:intent]
+      puts "📋 INTENT CLASSIFICATION"
+      puts "-" * 60
+      response_preview = responses[:intent].length > limit ? "#{responses[:intent][0..limit]}... (truncated, total: #{responses[:intent].length} chars)" : responses[:intent]
+      puts response_preview
+      puts ""
+
+      # Try to parse and show structured data
+      begin
+        require "json"
+        parsed = JSON.parse(responses[:intent])
+        puts "Parsed JSON:"
+        puts "  Intent: #{parsed["intent"]}"
+        puts "  Confidence: #{parsed["confidence"]}"
+      rescue JSON::ParserError
+        puts "(Not valid JSON)"
+      end
+      puts ""
+    end
+
+    # Planning Responses
+    if responses[:planning] && !responses[:planning].empty?
+      puts "📝 PLANNING RESPONSES (#{responses[:planning].size})"
+      puts "-" * 60
+      responses[:planning].each_with_index do |response, idx|
+        puts "Planning Attempt #{idx + 1}:"
+        response_preview = response.length > limit ? "#{response[0..limit]}... (truncated, total: #{response.length} chars)" : response
+        puts response_preview
+        puts ""
+
+        # Try to parse and show key info
+        begin
+          require "json"
+          parsed = JSON.parse(response)
+          puts "  Parsed: plan_id=#{parsed["plan_id"]}, confidence=#{parsed["confidence"]}, steps=#{parsed["steps"]&.size || 0}"
+        rescue JSON::ParserError
+          puts "  (Not valid JSON)"
+        end
+        puts ""
+      end
+    end
+
+    # Review Responses
+    if responses[:review] && !responses[:review].empty?
+      puts "🔍 REVIEW RESPONSES (#{responses[:review].size})"
+      puts "-" * 60
+      responses[:review].each_with_index do |response, idx|
+        puts "Review #{idx + 1}:"
+        response_preview = response.length > limit ? "#{response[0..limit]}... (truncated, total: #{response.length} chars)" : response
+        puts response_preview
+        puts ""
+
+        # Try to parse and show key info
+        begin
+          require "json"
+          parsed = JSON.parse(response)
+          puts "  Parsed: approved=#{parsed["approved"]}, issues=#{parsed["issues"]&.size || 0}"
+        rescue JSON::ParserError
+          puts "  (Not valid JSON)"
+        end
+        puts ""
+      end
+    end
+
+    # Developer Responses (for answers, etc.)
+    if responses[:developer] && !responses[:developer].empty?
+      puts "💬 DEVELOPER RESPONSES (#{responses[:developer].size})"
+      puts "-" * 60
+      responses[:developer].each_with_index do |response, idx|
+        puts "Response #{idx + 1}:"
+        response_preview = response.length > limit ? "#{response[0..limit]}... (truncated, total: #{response.length} chars)" : response
+        puts response_preview
+        puts ""
+      end
+    end
+
+    if responses[:intent].nil? && (responses[:planning].nil? || responses[:planning].empty?) &&
+       (responses[:review].nil? || responses[:review].empty?) &&
+       (responses[:developer].nil? || responses[:developer].empty?)
+      puts "(No raw responses captured yet)"
+    end
+
+    puts "=" * 60
+  end
+
   # Read trace file to see phase transitions
   def read_traces(limit: 20)
     trace_path = File.join(Dir.pwd, ".devagent", "traces.jsonl")
@@ -372,11 +1033,15 @@ puts "Devagent Console"
 puts "=" * 60
 puts "Available helper methods:"
 puts "  setup_context                    - Create context"
+puts "  test_classifying(task)           - Test only the Classifying phase"
+puts "  test_indexing(rebuild: false)    - Test only the Indexing phase"
+puts "  test_planning(task, build_index: true) - Test only the Planning phase"
 puts "  create_tracking_orchestrator     - Create orchestrator that tracks phases"
 puts "  show_phases                       - List all available phases"
 puts "  show_phase_history(orch)          - Show phase transition history"
 puts "  inspect_state(orch)               - Show detailed state information"
 puts "  show_phase_results(orch)          - Show detailed results for each phase"
+puts "  show_raw_responses(orch, limit:500) - Show raw LLM responses"
 puts "  read_traces(limit: 20)            - Read trace file for phase events"
 puts ""
 puts "Example usage:"

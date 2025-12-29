@@ -187,7 +187,13 @@ module Devagent
     end
 
     def parse_plan(raw)
-      json = JSON.parse(raw)
+      # Strip markdown code blocks if present
+      cleaned = raw.to_s
+                   .gsub(/^```(?:json|ruby|javascript|typescript|python|java|go|rust|php|markdown|yaml|text)?\s*\n/, "")
+                   .gsub(/\n```\s*$/, "")
+                   .strip
+
+      json = JSON.parse(cleaned)
       JSON::Validator.validate!(PLAN_SCHEMA, json)
       json
     rescue JSON::ParserError, JSON::Schema::ValidationError => e
@@ -204,7 +210,17 @@ module Devagent
     end
 
     def parse_review(raw)
-      json = JSON.parse(raw)
+      # Strip markdown code blocks if present, and extract JSON if there's extra text
+      cleaned = raw.to_s
+                   .gsub(/^```(?:json|ruby|javascript|typescript|python|java|go|rust|php|markdown|yaml|text)?\s*\n/, "")
+                   .gsub(/\n```\s*$/, "")
+                   .strip
+
+      # Try to extract just the JSON object if there's extra text after it
+      json_match = cleaned.match(/\{.*\}/m)
+      json_text = json_match ? json_match[0] : cleaned
+
+      json = JSON.parse(json_text)
       JSON::Validator.validate!(REVIEW_SCHEMA, json)
       json
     rescue JSON::ParserError, JSON::Schema::ValidationError => e

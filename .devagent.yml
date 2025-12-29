@@ -13,10 +13,11 @@ provider: ollama
 # - Heavy tasks (complex migrations): llama3.1:8b-instruct-q4_K_M
 #
 # For best results, use code-specific models for developer_model and planner_model
-model: "qwen2.5-coder:1.5b" # Benchmark winner: fastest + reliable (4/4 score, 0.57s)
-planner_model: "qwen2.5-coder:1.5b" # Fast JSON/structured planning
-developer_model: "qwen2.5-coder:7b-instruct-q5_K_M" # Quality model for code generation (3/4 score)
-reviewer_model: "mistral:7b-instruct" # Good for code review and analysis
+# Updated to use models that actually exist in your Ollama server
+model: "qwen2.5-coder:7b" # 7B model - better schema compliance than 1.5b
+planner_model: "qwen2.5-coder:7b" # 7B model for better JSON/structured planning (follows schema better)
+developer_model: "qwen2.5-coder:7b" # 7B model for code generation
+reviewer_model: "mistral:7b-instruct" # Already available, good for code review
 embed_model: "nomic-embed-text:latest" # Embedding model (use :latest tag for latest version)
 
 # OpenAI models (use with --provider openai)

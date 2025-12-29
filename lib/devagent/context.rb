@@ -83,8 +83,8 @@ module Devagent
           "command_max_output_bytes" => 20_000,
           "enable_git_tools" => false,
           "allowlist" => ["app/**", "lib/**", "spec/**", "config/**", "db/**", "src/**"],
-          "denylist" => [".git/**", "node_modules/**", "log/**", "tmp/**", "dist/**", "build/**", ".env*",
-                         "config/credentials*"]
+          "denylist" => [".git/**", "node_modules/**", "log/**", "tmp/**", "dist/**", "build/**", "coverage/**",
+                         ".env*", "config/credentials*"]
         },
         "memory" => { "short_term_turns" => 20 },
         "ui" => { "quiet" => false }
