@@ -18,8 +18,10 @@ module Devagent
         @read_timeout = config.fetch("timeout", DEFAULT_TIMEOUT_SECONDS).to_i
       end
 
-      def generate(prompt:, model:, params: {})
-        body = request_json("/api/generate", prompt: prompt, model: model, stream: false, options: params)
+      def generate(prompt:, model:, params: {}, format: nil)
+        payload = { prompt: prompt, model: model, stream: false, options: params }
+        payload[:format] = format if format
+        body = request_json("/api/generate", payload)
         body.fetch("response")
       end
 
