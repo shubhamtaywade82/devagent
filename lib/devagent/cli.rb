@@ -6,6 +6,8 @@ require_relative "auto"
 require_relative "orchestrator"
 require_relative "diagnostics"
 require_relative "ui"
+require_relative "bootstrap_templates"
+require_relative "bootstrapper"
 
 module Devagent
   # CLI exposes Thor commands for launching the agent and running diagnostics.
@@ -104,6 +106,44 @@ module Devagent
       raise Thor::Error, "Diagnostics failed" unless success
 
       success
+    end
+
+    desc "init", "Bootstrap an empty repository (guided, deterministic)"
+    def init
+      ctx = build_context
+      ui = UI::Toolkit.new(output: $stdout, input: $stdin)
+
+      unless ctx.repo_empty?
+        raise Thor::Error, "This directory is not empty. Bootstrap is only allowed in an empty repository."
+      end
+
+      kind = ui.prompt.select(
+        "What are you building?",
+        ["Ruby gem", "Rails app", "Script / utility", "Other"],
+        default: "Ruby gem"
+      )
+      language = ui.prompt.select(
+        "Primary language?",
+        ["Ruby", "JS/TS", "Mixed"],
+        default: "Ruby"
+      )
+      tests = ui.prompt.select(
+        "Do you want tests?",
+        ["Yes (RSpec/Jest)", "No"],
+        default: "Yes (RSpec/Jest)"
+      )
+      project_name = ui.prompt.ask("Project name?", default: "my_project")
+
+      plan = BootstrapTemplates.plan_for(
+        kind: kind,
+        language: language,
+        tests: tests.to_s.start_with?("Yes"),
+        project_name: project_name
+      )
+
+      Bootstrapper.new(ctx).run!(plan)
+      say("Bootstrap complete. You can now run `devagent` normally.", :green)
+      true
     end
 
     default_task :start

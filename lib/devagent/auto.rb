@@ -20,6 +20,7 @@ module Devagent
     end
 
     def repl
+      show_onboarding_if_needed
       log(:info, "Devagent ready. Type 'exit' to quit.")
       # Initialize Readline history
       reader.update_history
@@ -69,6 +70,31 @@ module Devagent
       else
         output.puts(message)
       end
+    end
+
+    def show_onboarding_if_needed
+      return unless context.respond_to?(:repo_empty?) && context.repo_empty?
+
+      already = context.memory.get("onboarding_shown") == true
+      return if already
+
+      msg = <<~MSG
+        Welcome to Devagent.
+
+        This directory is empty.
+        I can:
+        - Create files and project structure
+        - Explain code concepts
+        - Bootstrap a new project (`devagent init`)
+
+        I will never guess or modify files without confirmation.
+
+        What would you like to do?
+      MSG
+      log(:info, msg.strip)
+      context.memory.set("onboarding_shown", true)
+    rescue StandardError
+      nil
     end
   end
 end

@@ -5,6 +5,26 @@ require_relative "prompts"
 module Devagent
   # DiffGenerator asks the developer model for a minimal unified diff.
   class DiffGenerator
+    # Build a minimal unified diff for creating a new file from scratch.
+    #
+    # Controller-owned and deterministic; avoids relying on model formatting.
+    def self.build_add_file_diff(path:, content:)
+      raise Error, "content required" if content.to_s.empty?
+
+      lines = content.to_s.lines
+      raise Error, "content required" if lines.empty?
+
+      hunk_lines = lines.map { |line| "+#{line}" }.join
+      hunk_count = lines.size
+
+      <<~DIFF
+        --- /dev/null
+        +++ b/#{path}
+        @@ -0,0 +1,#{hunk_count} @@
+        #{hunk_lines}
+      DIFF
+    end
+
     def initialize(context)
       @context = context
     end

@@ -11,6 +11,7 @@ RSpec.describe Devagent::Orchestrator do
     instance_double(
       Devagent::Context,
       repo_path: "/workspace",
+      repo_empty?: false,
       session_memory: session_memory,
       index: index,
       tracer: tracer,
@@ -265,6 +266,18 @@ RSpec.describe Devagent::Orchestrator do
       expect(index).not_to have_received(:build!)
       expect(tool_bus).not_to have_received(:invoke)
       expect(tool_bus).not_to have_received(:run_tests)
+    end
+
+    it "halts with guided message for ambiguous action intent in an empty repo" do
+      allow(context).to receive(:repo_empty?).and_return(true)
+      orchestrator = described_class.new(context, output: output)
+
+      orchestrator.run("add authentication")
+
+      expect(index).not_to have_received(:build!)
+      expect(planner).not_to have_received(:plan)
+      expect(tool_bus).not_to have_received(:invoke)
+      expect(streamer).to have_received(:say).with(a_string_matching(/repository is empty/i), hash_including(level: :warn))
     end
   end
 end
