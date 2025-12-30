@@ -82,7 +82,15 @@ module Devagent
           "command_timeout_seconds" => 60,
           "command_max_output_bytes" => 20_000,
           "enable_git_tools" => false,
-          "allowlist" => ["app/**", "lib/**", "spec/**", "config/**", "db/**", "src/**"],
+          # Default allowlist is conservative but must include common repo-root files so that
+          # bootstrap and minimal scaffolding can work in empty repositories.
+          "allowlist" => [
+            "app/**", "lib/**", "spec/**", "config/**", "db/**", "src/**", "bin/**", "script/**", "test/**",
+            "README*", "LICENSE*", "CHANGELOG*",
+            "Gemfile", "Gemfile.lock", "Rakefile", "*.gemspec", ".ruby-version", ".gitignore",
+            "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+            "tsconfig.json", "jsconfig.json"
+          ],
           "denylist" => [".git/**", "node_modules/**", "log/**", "tmp/**", "dist/**", "build/**", ".env*",
                          "config/credentials*"]
         },
@@ -215,6 +223,31 @@ module Devagent
         "provider" => provider_for(:embedding),
         "model" => model_for(:embedding)
       }
+    end
+
+    # Controller-owned repository emptiness check.
+    #
+    # "Empty" means: no files/directories exist besides ignored internal metadata
+    # (e.g. .git, .devagent) and common OS noise.
+    #
+    # This is intentionally conservative: if anything non-ignored exists, we treat
+    # the repo as non-empty to avoid unsafe assumptions.
+    def repo_empty?
+      base = File.expand_path(repo_path.to_s)
+      glob = File.join(base, "**/*")
+      paths = Dir.glob(glob, File::FNM_DOTMATCH).map do |p|
+        p = File.expand_path(p)
+        p.start_with?("#{base}/") ? p.delete_prefix("#{base}/") : p
+      end
+
+      paths.reject! do |p|
+        p == "." || p == ".." || p.to_s.empty? ||
+          p.match?(%r{\A(\.git|\.devagent|\.bundle|\.DS_Store)(/|\z)})
+      end
+
+      paths.empty?
+    rescue StandardError
+      false
     end
 
     private

@@ -89,13 +89,19 @@ module Devagent
       @streamer = streamer
     end
 
-    def plan(task, controller_feedback: nil, visible_tools: nil)
+    def plan(task, controller_feedback: nil, controller_facts: nil, visible_tools: nil)
       attempts = 0
       feedback = nil
       raw_plan = nil
 
       loop do
-        raw_plan = generate_plan(task, feedback, controller_feedback: controller_feedback, visible_tools: visible_tools)
+        raw_plan = generate_plan(
+          task,
+          feedback,
+          controller_feedback: controller_feedback,
+          controller_facts: controller_facts,
+          visible_tools: visible_tools
+        )
         payload = parse_plan(raw_plan)
         review = review_plan(task, raw_plan)
         if review["approved"] || attempts >= 1
@@ -153,8 +159,14 @@ module Devagent
 
     attr_reader :context, :streamer
 
-    def generate_plan(task, feedback, controller_feedback:, visible_tools:)
-      prompt = build_prompt(task, feedback, controller_feedback: controller_feedback, visible_tools: visible_tools)
+    def generate_plan(task, feedback, controller_feedback:, controller_facts:, visible_tools:)
+      prompt = build_prompt(
+        task,
+        feedback,
+        controller_feedback: controller_feedback,
+        controller_facts: controller_facts,
+        visible_tools: visible_tools
+      )
       response_format = json_schema_format(PLAN_SCHEMA) if context.provider_for(:planner) == "openai"
       return stream_plan(prompt, response_format) if streamer
 
@@ -209,7 +221,7 @@ module Devagent
       { "approved" => true, "issues" => [] }
     end
 
-    def build_prompt(task, feedback, controller_feedback:, visible_tools:)
+    def build_prompt(task, feedback, controller_feedback:, controller_facts:, visible_tools:)
       # Context assembly discipline: after we have controller feedback (i.e., post-iteration),
       # do not keep expanding context with long history or broad retrieval. Feed only reduced observations.
       retrieved = ""
@@ -278,6 +290,9 @@ module Devagent
                              ""
                            end
 
+      facts_hash = controller_facts.is_a?(Hash) ? controller_facts : {}
+      facts_section = "Controller facts (JSON):\n#{JSON.generate(facts_hash)}"
+
       <<~PROMPT
         #{Prompts::PLANNER_SYSTEM}
 
@@ -294,6 +309,8 @@ module Devagent
 
         Repository context:
         #{retrieved}
+
+        #{facts_section}
 
         #{feedback_section}
         #{controller_section}

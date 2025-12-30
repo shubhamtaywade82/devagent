@@ -7,7 +7,7 @@ require "fileutils"
 RSpec.describe Devagent::Auto do
   let(:repo_path) { Dir.mktmpdir }
   let(:tracer) { instance_double(Devagent::Tracer, event: nil) }
-  let(:context) { instance_double(Devagent::PluginContext, repo_path: repo_path, tracer: tracer) }
+  let(:context) { instance_double(Devagent::PluginContext, repo_path: repo_path, tracer: tracer, repo_empty?: false) }
   let(:orchestrator) { instance_double(Devagent::Orchestrator, run: nil) }
 
   before do

@@ -52,6 +52,12 @@ module Devagent
       - For simple command execution tasks, confidence should be 0.8 or higher.
       - For simple file edits (add comment, change one line), confidence should be 0.8 or higher.
 
+      EMPTY REPOSITORY RULES (non-negotiable):
+      - If repo_empty=true, DO NOT use fs.read or fs.write (or their aliases).
+      - If repo_empty=true, use fs.create to create new files.
+      - If repo_empty=true and user intent is ambiguous, ask ONE clarification question and STOP (no plan steps).
+      - If repo_empty=true, do NOT assume frameworks or project structure.
+
       File reading guidance:
       - For questions about repository description/purpose, identify and read relevant documentation files (README, docs, etc.) based on what's available in the repository.
       - For questions about specific code, read the relevant source files.
@@ -62,6 +68,31 @@ module Devagent
       - Use exec.run for tests/linters/diagnostics.
       - Do NOT use exec.run for installing dependencies, pushing code, or changing system state.
       - Commands run in the repository root directory.
+
+      EXAMPLE (empty repo):
+      User: "create a README"
+      repo_empty: true
+
+      Plan:
+      {
+        "plan_id": "create_readme",
+        "goal": "Create a README",
+        "assumptions": ["Repository is empty; creating a new README.md without reading/writing existing files"],
+        "steps": [
+          {
+            "step_id": 1,
+            "action": "fs.create",
+            "path": "README.md",
+            "command": null,
+            "content": "# Project\\n\\nDescribe this project.\\n",
+            "reason": "Repository is empty; create initial documentation",
+            "depends_on": [0]
+          }
+        ],
+        "success_criteria": ["README.md exists with initial content"],
+        "rollback_strategy": "Delete README.md",
+        "confidence": 0.8
+      }
     PROMPT
 
     DIFF_SYSTEM = <<~PROMPT

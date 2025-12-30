@@ -26,6 +26,7 @@ module Devagent
     def run(task)
       context.session_memory.append("user", task)
       state = AgentState.initial(goal: task)
+      state.repo_empty = context.respond_to?(:repo_empty?) ? context.repo_empty? : false
 
       # Security: Handle "list all files" requests BEFORE intent classification
       # This prevents misclassified intents from bypassing the security check
@@ -71,6 +72,17 @@ module Devagent
 
       context.tracer.event("intent", intent: state.intent, confidence: state.intent_confidence)
 
+      # Empty repository onboarding / guided flow for ambiguous action intents.
+      # Controller-owned: do not plan, do not run tools, do not index.
+      if state.repo_empty && %w[CODE_EDIT CODE_REVIEW DEBUG].include?(state.intent.to_s)
+        guided = handle_empty_repo_action_intent(task)
+        return if guided == true
+        if guided.is_a?(String) && !guided.strip.empty?
+          # One clarification round, then proceed deterministically.
+          return run(guided.strip)
+        end
+      end
+
       if %w[EXPLANATION GENERAL].include?(state.intent)
 
         # Check if the question requires running a command (e.g., "is this rubocop offenses free?")
@@ -110,7 +122,12 @@ module Devagent
           end
 
           plan = with_spinner("Planning") do
-            planner.plan(task, controller_feedback: controller_feedback(state), visible_tools: visible_tools)
+            planner.plan(
+              task,
+              controller_feedback: controller_feedback(state),
+              controller_facts: { "repo_empty" => state.repo_empty == true },
+              visible_tools: visible_tools
+            )
           end
 
           state.plan = plan
@@ -293,6 +310,10 @@ module Devagent
       command = step["command"]
       content = step["content"]
 
+      if state.repo_empty && %w[fs.read fs_read fs.write fs_write fs.delete fs_delete].include?(action)
+        raise Error, "#{action} not allowed in empty repository"
+      end
+
       case action
       when "fs.read", "fs_read"
         tool_invoke_with_policy(state, "fs.read", "path" => path)
@@ -303,7 +324,7 @@ module Devagent
         raise Error, "content required" if content.to_s.empty?
 
         # Deterministic add-file diff generation (do not rely on model formatting).
-        diff = build_add_file_diff(path: path.to_s, content: content.to_s)
+        diff = DiffGenerator.build_add_file_diff(path: path.to_s, content: content.to_s)
 
         tool_invoke_with_policy(state, "fs.write_diff", "path" => path.to_s, "diff" => diff)
       when "fs.write", "fs_write"
@@ -791,6 +812,14 @@ module Devagent
     end
 
     def validate_plan!(state, plan, visible_tools:)
+      if state.repo_empty
+        forbidden = plan.steps.select { |s| %w[fs.read fs_read fs.write fs_write fs.delete fs_delete].include?(s["action"].to_s) }
+        unless forbidden.empty?
+          actions = forbidden.map { |s| s["action"].to_s }.uniq
+          raise Error, "plan uses forbidden tools in empty repository: #{actions.join(", ")}"
+        end
+      end
+
       # For command-only plans (checking tools like rubocop), allow lower confidence
       # since these are straightforward tasks
       has_commands = plan.steps.any? { |s| %w[exec.run run_command run_tests].include?(s["action"].to_s) }
@@ -1374,24 +1403,60 @@ module Devagent
       readme_content.join("\n")
     end
 
-    # Build a minimal unified diff for creating a new file from scratch.
-    #
-    # This is controller-owned and deterministic; it avoids relying on model-produced diff formatting.
-    def build_add_file_diff(path:, content:)
-      raise Error, "content required" if content.to_s.empty?
+    # Returns:
+    # - false/nil: not handled; continue normal flow
+    # - true: handled; halt safely
+    # - String: rewritten task to continue with (after one clarification)
+    def handle_empty_repo_action_intent(task)
+      # If the user already specified a file to create, let normal planning handle it.
+      mentions_file = task.to_s.match?(/\b([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)\b/)
+      create_request = task.to_s.downcase.match?(/\b(create|add|new|generate)\b/)
+      return false if mentions_file && create_request
 
-      lines = content.to_s.lines
-      raise Error, "content required" if lines.empty?
+      # Deterministic, controller-owned guidance (Cursor-style) with a single clarification round.
+      msg = <<~MSG
+        This repository is empty.
 
-      hunk_lines = lines.map { |line| "+#{line}" }.join
-      hunk_count = lines.size
+        Before I proceed, choose one:
+        1) Initialize a new project (guided): run `devagent init`
+        2) Create a single file (tell me the path + what it should contain)
+        3) Explain options only
+      MSG
+      streamer.say(msg.strip, level: :warn) unless quiet?
 
-      <<~DIFF
-        --- /dev/null
-        +++ b/#{path}
-        @@ -0,0 +1,#{hunk_count} @@
-        #{hunk_lines}
-      DIFF
+      # If interactive, ask once; otherwise halt safely.
+      return true unless ui&.respond_to?(:prompt)
+
+      choice = ui.prompt.select(
+        "Choose an option:",
+        [
+          "1) Initialize a new project (guided)",
+          "2) Create a single file",
+          "3) Explain options only"
+        ],
+        default: "3) Explain options only"
+      )
+
+      case choice.to_s
+      when /\A1\)/
+        streamer.say("Run `devagent init` to bootstrap an empty repository.", level: :info) unless quiet?
+        true
+      when /\A2\)/
+        answer = ui.prompt.ask("What file should I create? (example: README.md) Also say briefly what it should contain.", default: "")
+        if answer.to_s.strip.empty?
+          streamer.say("Clarification needed: please provide a file path (and optionally what it should contain), then rerun your request.", level: :warn) unless quiet?
+          true
+        else
+          # Rewrite into an explicit, unambiguous create request and continue.
+          "create file #{answer.strip}"
+        end
+      else
+        streamer.say("Options:\n- `devagent init` to bootstrap a project\n- Or ask: “create file README.md that …”", level: :info) unless quiet?
+        true
+      end
+    rescue StandardError
+      # Non-interactive or prompt failure: halt safely.
+      true
     end
   end
 end

@@ -13,6 +13,7 @@ module Devagent
     :intent,
     :intent_confidence,
     :plan,
+    :repo_empty,
     :artifacts,
     :observations,
     :errors,
@@ -40,6 +41,7 @@ module Devagent
         intent: nil,
         intent_confidence: 0.0,
         plan: nil,
+        repo_empty: false,
         artifacts: {
           files_read: Set.new,
           files_written: Set.new,

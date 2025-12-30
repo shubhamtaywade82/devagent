@@ -49,7 +49,7 @@ module Devagent
       end
 
       def interactive?
-        output.respond_to?(:tty?) ? output.tty? : true
+        output.respond_to?(:tty?) ? output.tty? : false
       end
 
       private

@@ -103,6 +103,12 @@ module Devagent
       context.tracer.event("fs_write_diff", path: relative_path)
       return { "applied" => false } if dry_run?
 
+      raise Error, "Not a git repository (run `git init`)" unless git_repo?
+
+      # Ensure parent directories exist for new files (git apply does not create them reliably).
+      full = File.join(context.repo_path, relative_path)
+      FileUtils.mkdir_p(File.dirname(full))
+
       # We intentionally use git apply because it is the most reliable diff applier
       # for unified diffs and keeps behavior deterministic.
       IO.popen(["git", "-C", context.repo_path, "apply", "--whitespace=nowarn", "-"], "w") { |io| io.write(diff) }
