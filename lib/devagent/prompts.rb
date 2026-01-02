@@ -93,6 +93,9 @@ module Devagent
       - Use exec.run for tests/linters/diagnostics.
       - Do NOT use exec.run for installing dependencies, pushing code, or changing system state.
       - Commands run in the repository root directory.
+      - CRITICAL: If you use exec.run, you MUST provide a "command" field with the full command string (e.g., "bundle exec rspec", "rubocop", "npm test").
+      - exec.run steps without a command will fail execution.
+      - For questions that only need to read files, do NOT add unnecessary exec.run steps.
     PROMPT
 
     DIFF_SYSTEM = <<~PROMPT

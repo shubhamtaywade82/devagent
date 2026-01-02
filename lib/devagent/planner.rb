@@ -193,7 +193,11 @@ module Devagent
                    .gsub(/\n```\s*$/, "")
                    .strip
 
-      json = JSON.parse(cleaned)
+      # Try to extract just the JSON object if there's extra text before/after it
+      json_match = cleaned.match(/\{.*\}/m)
+      json_text = json_match ? json_match[0] : cleaned
+
+      json = JSON.parse(json_text)
       JSON::Validator.validate!(PLAN_SCHEMA, json)
       json
     rescue JSON::ParserError, JSON::Schema::ValidationError => e

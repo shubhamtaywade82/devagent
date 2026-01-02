@@ -787,6 +787,681 @@ module PhaseInspector
     }
   end
 
+  # Test only the Observation phase
+  def test_observation(task = nil, state: nil, build_index: false)
+    ctx = setup_context
+
+    if task.nil? && state.nil?
+      puts "Usage: test_observation('your task here')"
+      puts "   or: test_observation(state: <AgentState object>)"
+      puts "Example: test_observation('read README.md')"
+      puts ""
+      puts "Options:"
+      puts "  build_index: true  - Build index before planning (default: false)"
+      return
+    end
+
+    puts "=" * 60
+    puts "Testing Observation Phase"
+    puts "=" * 60
+    puts ""
+
+    # Get or create state with executed plan
+    if state.nil?
+      if task.nil?
+        puts "❌ Error: Either task or state must be provided"
+        return
+      end
+
+      puts "Task: #{task}"
+      puts ""
+
+      # Build index if requested
+      if build_index
+        index = ctx.index
+        metadata = index.metadata
+        backend_info = ctx.embedding_backend_info
+
+        needs_rebuild = if metadata && !metadata.empty?
+                          metadata["provider"] != backend_info["provider"] ||
+                            metadata["model"] != ctx.model_for(:embedding) ||
+                            (metadata["dim"] && backend_info["dim"] && metadata["dim"] != backend_info["dim"])
+                        else
+                          true
+                        end
+
+        if needs_rebuild
+          puts "Building index..."
+          index.build!
+        end
+        puts ""
+      end
+
+      # Generate and execute plan
+      puts "Generating and executing plan..."
+      planner = Devagent::Planner.new(ctx)
+      plan = planner.plan(task)
+
+      state = Devagent::AgentState.initial(goal: plan.goal || task)
+      state.intent = "CODE_EDIT"
+      state.intent_confidence = 0.8
+      state.plan = plan
+      state.phase = :execution
+      state.cycle = 1
+
+      # Execute plan
+      execution_orchestrator = Class.new(Devagent::Orchestrator) do
+        def execute_plan_with_logging(state)
+          plan = state.plan
+          plan.steps.each do |step|
+            state.current_step = step["step_id"].to_i
+            begin
+              ensure_dependencies!(step, state.step_results)
+              result = execute_step(state, plan, step)
+              state.step_results[step["step_id"]] = result
+              state.record_observation(normalize_step_observation(result, step))
+              raise Error, "step #{step["step_id"]} failed" unless result["success"]
+            rescue StandardError => e
+              error_msg = e.message
+              state.record_error(signature: "step_failed:#{step["step_id"]}", message: error_msg)
+              state.step_results[step["step_id"]] = { "success" => false, "error" => error_msg }
+              state.record_observation({
+                                         "type" => "STEP_FAILED",
+                                         "step_id" => step["step_id"],
+                                         "status" => "FAIL",
+                                         "error" => error_msg
+                                       })
+              break
+            end
+          end
+        end
+      end.new(ctx, output: StringIO.new, ui: nil)
+
+      execution_orchestrator.execute_plan_with_logging(state)
+      puts "✅ Plan executed (#{plan.steps.size} steps)"
+      puts ""
+    else
+      puts "Using provided state"
+      puts "  Goal: #{state.goal}"
+      puts "  Files written: #{state.artifacts[:files_written].size}"
+      puts "  Commands run: #{state.artifacts[:commands_run].size}"
+      puts ""
+    end
+
+    # Show state before observation
+    puts "📊 State Before Observation:"
+    puts "-" * 60
+    puts "  Files read: #{state.artifacts[:files_read].size}"
+    puts "  Files written: #{state.artifacts[:files_written].size}"
+    puts "  Commands run: #{state.artifacts[:commands_run].size}"
+    puts "  Observations: #{state.observations.size}"
+    puts "  Changes made: #{ctx.tool_bus.changes_made?}"
+    puts ""
+
+    # Run observation phase
+    puts "🔍 Running Observation Phase..."
+    puts "-" * 60
+
+    observation_orchestrator = Class.new(Devagent::Orchestrator) do
+      attr_reader :observation_result
+
+      def observe_with_logging(state)
+        @observation_result = {
+          changes_made: context.tool_bus.changes_made?,
+          should_run_tests: should_run_tests?,
+          observations_before: state.observations.size
+        }
+
+        observe_after_execution(state)
+
+        @observation_result[:observations_after] = state.observations.size
+        @observation_result[:new_observations] = state.observations.last(
+          state.observations.size - @observation_result[:observations_before]
+        )
+      end
+    end.new(ctx, output: StringIO.new, ui: nil)
+
+    begin
+      observation_orchestrator.observe_with_logging(state)
+      result = observation_orchestrator.observation_result
+
+      puts "  Changes made: #{result[:changes_made]}"
+      puts "  Should run tests: #{result[:should_run_tests]}"
+      puts "  Observations before: #{result[:observations_before]}"
+      puts "  Observations after: #{result[:observations_after]}"
+      puts "  New observations: #{result[:observations_after] - result[:observations_before]}"
+      puts ""
+
+      # Show new observations
+      if result[:new_observations].any?
+        puts "📝 New Observations:"
+        puts "-" * 60
+        result[:new_observations].each do |obs|
+          if obs.is_a?(Hash)
+            puts "  - Type: #{obs["type"]}"
+            puts "    Status: #{obs["status"]}" if obs["status"]
+            puts "    Message: #{obs["message"]}" if obs["message"]
+            puts "    Command: #{obs["command"]}" if obs["command"]
+            puts "    Exit code: #{obs["exit_code"]}" if obs["exit_code"]
+          else
+            puts "  - #{obs}"
+          end
+          puts ""
+        end
+      else
+        puts "  (No new observations added)"
+        puts ""
+      end
+
+      # Show all observations
+      if state.observations.any?
+        puts "👁️  All Observations (#{state.observations.size}):"
+        puts "-" * 60
+        state.observations.each_with_index do |obs, idx|
+          if obs.is_a?(Hash)
+            puts "  #{idx + 1}. #{obs["type"]}"
+            puts "     Status: #{obs["status"]}" if obs["status"]
+            puts "     Message: #{obs["message"]}" if obs["message"]
+          else
+            puts "  #{idx + 1}. #{obs}"
+          end
+        end
+        puts ""
+      end
+
+      puts "✅ Observation Phase Complete"
+    rescue StandardError => e
+      puts "❌ Observation Phase Failed:"
+      puts "  Error: #{e.class}: #{e.message}"
+      puts "  Backtrace:"
+      e.backtrace.first(5).each { |line| puts "    #{line}" }
+      puts ""
+    end
+
+    puts "=" * 60
+
+    {
+      state: state,
+      observation_result: observation_orchestrator.observation_result
+    }
+  end
+
+  # Test only the Reduction phase
+  def test_reduction(state = nil, task: nil)
+    ctx = setup_context
+
+    if state.nil? && task.nil?
+      puts "Usage: test_reduction(state: <AgentState object>)"
+      puts "   or: test_reduction(task: 'your task')"
+      puts "Example: test_reduction(task: 'read README.md')"
+      return
+    end
+
+    puts "=" * 60
+    puts "Testing Reduction Phase"
+    puts "=" * 60
+    puts ""
+
+    # Create or use provided state
+    if state.nil?
+      if task.nil?
+        puts "❌ Error: Either state or task must be provided"
+        return
+      end
+
+      puts "Task: #{task}"
+      puts "Creating sample state..."
+      puts ""
+
+      # Create a sample state with some observations and artifacts
+      state = Devagent::AgentState.initial(goal: task)
+      state.intent = "CODE_EDIT"
+      state.intent_confidence = 0.8
+      state.cycle = 1
+
+      # Add some sample observations
+      state.record_observation({ "type" => "FILE_READ", "path" => "README.md" })
+      state.record_observation({ "type" => "FILE_WRITTEN", "path" => "lib/example.rb" })
+      state.record_observation({ "type" => "COMMAND_EXECUTED", "command" => "bundle exec rspec", "exit_code" => 0 })
+      state.record_observation({ "type" => "TEST_RESULT", "status" => "PASS" })
+
+      # Add some artifacts
+      state.artifacts[:files_read] << "README.md"
+      state.artifacts[:files_written] << "lib/example.rb"
+      state.artifacts[:commands_run] << "bundle exec rspec"
+    else
+      puts "Using provided state"
+      puts ""
+    end
+
+    # Show state before reduction
+    puts "📊 State Before Reduction:"
+    puts "-" * 60
+    puts "  Files read: #{state.artifacts[:files_read].size}"
+    state.artifacts[:files_read].each { |f| puts "    - #{f}" }
+    puts "  Files written: #{state.artifacts[:files_written].size}"
+    state.artifacts[:files_written].each { |f| puts "    - #{f}" }
+    puts "  Commands run: #{state.artifacts[:commands_run].size}"
+    state.artifacts[:commands_run].each { |c| puts "    - #{c}" }
+    puts "  Observations: #{state.observations.size}"
+    puts "  Last 10 observation types:"
+    state.observations.last(10).each do |obs|
+      type = obs.is_a?(Hash) ? obs["type"] : obs.to_s
+      puts "    - #{type}"
+    end
+    puts ""
+
+    # Run reduction phase
+    puts "🔄 Running Reduction Phase..."
+    puts "-" * 60
+
+    reduction_orchestrator = Class.new(Devagent::Orchestrator) do
+      def reduce_with_logging(state)
+        reduce_state(state)
+      end
+    end.new(ctx, output: StringIO.new, ui: nil)
+
+    begin
+      summary = reduction_orchestrator.reduce_with_logging(state)
+      state.summary = summary
+
+      puts "  Summary generated: #{summary}"
+      puts ""
+
+      # Parse and explain summary
+      puts "📋 Summary Breakdown:"
+      puts "-" * 60
+      if summary.include?("changed_files=")
+        changed_match = summary.match(/changed_files=(\d+)/)
+        puts "  Changed files: #{changed_match ? changed_match[1] : "unknown"}"
+      end
+      if summary.include?("tests=")
+        tests_match = summary.match(/tests=([^ ]+)/)
+        puts "  Last test result: #{tests_match ? tests_match[1] : "unknown"}"
+      end
+      if summary.include?("observations=")
+        obs_match = summary.match(/observations=(.+)/)
+        if obs_match
+          obs_types = obs_match[1].split(",")
+          puts "  Observation types: #{obs_types.size}"
+          obs_types.each { |type| puts "    - #{type}" }
+        end
+      end
+      puts ""
+
+      puts "✅ Reduction Phase Complete"
+      puts "  State summary: #{state.summary}"
+    rescue StandardError => e
+      puts "❌ Reduction Phase Failed:"
+      puts "  Error: #{e.class}: #{e.message}"
+      puts "  Backtrace:"
+      e.backtrace.first(5).each { |line| puts "    #{line}" }
+      puts ""
+    end
+
+    puts "=" * 60
+
+    {
+      state: state,
+      summary: state.summary
+    }
+  end
+
+  # Test only the Decision phase
+  def test_decision(state = nil, task: nil, plan: nil, build_index: false)
+    ctx = setup_context
+
+    if state.nil? && (task.nil? || plan.nil?)
+      puts "Usage: test_decision(state: <AgentState object>)"
+      puts "   or: test_decision(task: 'your task', plan: <Plan object>)"
+      puts "Example: test_decision(task: 'read README.md', plan: <plan>)"
+      puts ""
+      puts "Options:"
+      puts "  build_index: true  - Build index before planning (default: false)"
+      return
+    end
+
+    puts "=" * 60
+    puts "Testing Decision Phase"
+    puts "=" * 60
+    puts ""
+
+    # Create or use provided state
+    if state.nil?
+      if task.nil? || plan.nil?
+        puts "❌ Error: Either state or (task and plan) must be provided"
+        return
+      end
+
+      puts "Task: #{task}"
+      puts ""
+
+      # Build index if requested
+      if build_index
+        index = ctx.index
+        metadata = index.metadata
+        backend_info = ctx.embedding_backend_info
+
+        needs_rebuild = if metadata && !metadata.empty?
+                          metadata["provider"] != backend_info["provider"] ||
+                            metadata["model"] != ctx.model_for(:embedding) ||
+                            (metadata["dim"] && backend_info["dim"] && metadata["dim"] != backend_info["dim"])
+                        else
+                          true
+                        end
+
+        if needs_rebuild
+          puts "Building index..."
+          index.build!
+        end
+        puts ""
+      end
+
+      # Create state with plan
+      state = Devagent::AgentState.initial(goal: task)
+      state.intent = "CODE_EDIT"
+      state.intent_confidence = 0.8
+      state.plan = plan
+      state.cycle = 1
+
+      # Add sample step results and observations
+      if plan.steps.any?
+        plan.steps.each do |step|
+          state.step_results[step["step_id"]] = {
+            "success" => true,
+            "artifact" => { "path" => step["path"], "content" => "sample content" }
+          }
+        end
+      end
+
+      # Add sample observations
+      state.record_observation({ "type" => "FILE_READ", "path" => "README.md" })
+      state.record_observation({ "type" => "TEST_RESULT", "status" => "PASS" })
+    else
+      puts "Using provided state"
+      puts "  Goal: #{state.goal}"
+      puts "  Plan steps: #{state.plan&.steps&.size || 0}"
+      puts "  Step results: #{state.step_results.size}"
+      puts "  Observations: #{state.observations.size}"
+      puts ""
+    end
+
+    # Show inputs to decision
+    puts "📊 Decision Inputs:"
+    puts "-" * 60
+    puts "  Plan:"
+    if state.plan
+      puts "    Goal: #{state.plan.goal}"
+      puts "    Steps: #{state.plan.steps.size}"
+      puts "    Success criteria: #{state.plan.success_criteria.size}"
+      state.plan.success_criteria.each { |c| puts "      - #{c}" }
+      puts "    Confidence: #{(state.plan.confidence * 100).round}%"
+    else
+      puts "    (No plan)"
+    end
+    puts ""
+    puts "  Step Results: #{state.step_results.size}"
+    state.step_results.each do |step_id, result|
+      success = result.is_a?(Hash) ? result["success"] : true
+      puts "    Step #{step_id}: #{success ? "✅" : "❌"}"
+    end
+    puts ""
+    puts "  Observations: #{state.observations.size}"
+    state.observations.last(10).each do |obs|
+      type = obs.is_a?(Hash) ? obs["type"] : obs.to_s
+      status = obs["status"] if obs.is_a?(Hash)
+      puts "    - #{type}#{" (#{status})" if status}"
+    end
+    puts ""
+
+    # Run decision phase
+    puts "🎯 Running Decision Phase..."
+    puts "-" * 60
+
+    decision_orchestrator = Class.new(Devagent::Orchestrator) do
+      attr_reader :decision_result
+
+      def decide_with_logging(state, _task, max_cycles: 5)
+        # Prepare plan payload
+        _ = max_cycles # Not used in this test, but kept for signature compatibility
+        plan_payload = if state.plan
+                         {
+                           "plan_id" => state.plan.plan_id,
+                           "goal" => state.plan.goal,
+                           "steps" => state.plan.steps,
+                           "success_criteria" => state.plan.success_criteria,
+                           "confidence" => state.plan.confidence
+                         }
+                       else
+                         {}
+                       end
+
+        # Get decision from DecisionEngine
+        decision = Devagent::DecisionEngine.new(context).decide(
+          plan: plan_payload,
+          step_results: state.step_results,
+          observations: state.observations.last(30)
+        )
+
+        @decision_result = decision
+        decision
+      end
+    end.new(ctx, output: StringIO.new, ui: nil)
+
+    begin
+      decision = decision_orchestrator.decide_with_logging(state, task || state.goal, max_cycles: 5)
+
+      puts "  Decision: #{decision["decision"]}"
+      puts "  Reason: #{decision["reason"]}"
+      puts "  Confidence: #{(decision["confidence"].to_f * 100).round(1)}%"
+      puts ""
+
+      # Show what the decision means
+      puts "📋 Decision Interpretation:"
+      puts "-" * 60
+      case decision["decision"]
+      when "SUCCESS"
+        puts "  ✅ SUCCESS: Task completed successfully"
+        puts "     Next phase: :done"
+        puts "     The agent will generate a final answer."
+      when "RETRY"
+        puts "  🔄 RETRY: Need to refine and retry"
+        puts "     Next phase: :planning (if cycles remaining)"
+        puts "     The agent will create a new plan."
+      when "BLOCKED"
+        puts "  🚫 BLOCKED: Cannot proceed"
+        puts "     Next phase: :halted"
+        puts "     The agent will stop execution."
+      end
+      puts ""
+
+      # Show raw decision response
+      puts "📝 Raw Decision Response:"
+      puts "-" * 60
+      require "json"
+      puts JSON.pretty_generate(decision)
+      puts ""
+
+      puts "✅ Decision Phase Complete"
+    rescue StandardError => e
+      puts "❌ Decision Phase Failed:"
+      puts "  Error: #{e.class}: #{e.message}"
+      puts "  Backtrace:"
+      e.backtrace.first(5).each { |line| puts "    #{line}" }
+      puts ""
+    end
+
+    puts "🔧 Configuration:"
+    puts "-" * 60
+    puts "  Decision Model: #{ctx.model_for(:reviewer)}"
+    puts "  Provider: #{ctx.provider_for(:reviewer)}"
+    puts ""
+
+    puts "=" * 60
+
+    {
+      state: state,
+      decision: decision_orchestrator.decision_result
+    }
+  end
+
+  # Run a full orchestrator run and inspect all phases together
+  def test_full_run(task = nil, show_raw: false, show_traces: false, build_index: false)
+    if task.nil?
+      puts "Usage: test_full_run('your task here')"
+      puts "Example: test_full_run('what is this repo about?')"
+      puts ""
+      puts "Options:"
+      puts "  show_raw: true      - Show raw LLM responses (default: false)"
+      puts "  show_traces: true   - Show trace events (default: false)"
+      puts "  build_index: true   - Build index before running (default: false)"
+      return
+    end
+
+    ctx = setup_context
+
+    puts "=" * 60
+    puts "Full Orchestrator Run - All Phases"
+    puts "=" * 60
+    puts "Task: #{task}"
+    puts ""
+
+    # Build index if requested
+    if build_index
+      index = ctx.index
+      metadata = index.metadata
+      backend_info = ctx.embedding_backend_info
+
+      needs_rebuild = if metadata && !metadata.empty?
+                        metadata["provider"] != backend_info["provider"] ||
+                          metadata["model"] != ctx.model_for(:embedding) ||
+                          (metadata["dim"] && backend_info["dim"] && metadata["dim"] != backend_info["dim"])
+                      else
+                        true
+                      end
+
+      if needs_rebuild
+        puts "Building index..."
+        index.build!
+        puts "Index ready (#{index.document_count} documents)"
+      else
+        puts "Using existing index (#{index.document_count} documents)"
+      end
+      puts ""
+    end
+
+    # Create tracking orchestrator
+    puts "Creating tracking orchestrator..."
+    orch = create_tracking_orchestrator
+    puts ""
+
+    # Run the task
+    puts "🚀 Running task through all phases..."
+    puts "-" * 60
+    puts ""
+
+    begin
+      state = orch.run(task)
+      puts ""
+      puts "✅ Run completed!"
+      puts "  Final phase: #{state.phase}"
+      puts "  Final confidence: #{(state.confidence * 100).round(1)}%"
+      puts "  Cycles: #{state.cycle}"
+      puts ""
+    rescue StandardError => e
+      puts ""
+      puts "❌ Run failed:"
+      puts "  Error: #{e.class}: #{e.message}"
+      puts "  Backtrace:"
+      e.backtrace.first(5).each { |line| puts "    #{line}" }
+      puts ""
+      return
+    end
+
+    # Show comprehensive results
+    puts "=" * 60
+    puts "Phase Transition History"
+    puts "=" * 60
+    show_phase_history(orch)
+    puts ""
+
+    puts "=" * 60
+    puts "Detailed Phase Results"
+    puts "=" * 60
+    show_phase_results(orch)
+    puts ""
+
+    puts "=" * 60
+    puts "Final State Summary"
+    puts "=" * 60
+    inspect_state(orch)
+    puts ""
+
+    # Show raw responses if requested
+    if show_raw
+      puts "=" * 60
+      puts "Raw LLM Responses"
+      puts "=" * 60
+      show_raw_responses(orch, limit: 500)
+      puts ""
+    end
+
+    # Show traces if requested
+    if show_traces
+      puts "=" * 60
+      puts "Trace Events"
+      puts "=" * 60
+      read_traces(limit: 50)
+      puts ""
+    end
+
+    # Show configuration
+    puts "=" * 60
+    puts "Configuration"
+    puts "=" * 60
+    puts "  Planner Model: #{ctx.model_for(:planner)}"
+    puts "  Developer Model: #{ctx.model_for(:developer)}"
+    puts "  Reviewer Model: #{ctx.model_for(:reviewer)}"
+    puts "  Embedding Model: #{ctx.model_for(:embedding)}"
+    puts "  Provider: #{ctx.provider_for(:planner)}"
+    puts ""
+
+    # Summary statistics
+    if orch.respond_to?(:last_state) && orch.last_state
+      state = orch.last_state
+      puts "=" * 60
+      puts "Run Statistics"
+      puts "=" * 60
+      puts "  Total phases: #{orch.phase_history.size}"
+      puts "  Cycles: #{state.cycle}"
+      puts "  Files read: #{state.artifacts[:files_read].size}"
+      puts "  Files written: #{state.artifacts[:files_written].size}"
+      puts "  Commands run: #{state.artifacts[:commands_run].size}"
+      puts "  Observations: #{state.observations.size}"
+      puts "  Errors: #{state.errors.size}"
+      puts "  Tool rejections: #{state.tool_rejections}"
+      puts "  Final confidence: #{(state.confidence * 100).round(1)}%"
+      puts ""
+    end
+
+    puts "=" * 60
+    puts "Full Run Complete"
+    puts "=" * 60
+    puts ""
+    puts "You can now use these helpers for more details:"
+    puts "  show_phase_history(orch)      - See phase transitions"
+    puts "  show_phase_results(orch)       - See detailed phase results"
+    puts "  inspect_state(orch)            - See state details"
+    puts "  show_raw_responses(orch)       - See LLM responses"
+    puts "  read_traces(limit: 50)        - See trace events"
+    puts ""
+
+    {
+      orchestrator: orch,
+      state: orch.respond_to?(:last_state) ? orch.last_state : nil
+    }
+  end
+
   # Create a tracking orchestrator that exposes state and tracks phase transitions
   def create_tracking_orchestrator
     ctx = setup_context
@@ -1287,6 +1962,11 @@ puts "  test_classifying(task)           - Test only the Classifying phase"
 puts "  test_indexing(rebuild: false)    - Test only the Indexing phase"
 puts "  test_planning(task, build_index: true) - Test only the Planning phase"
 puts "  test_execution(task, build_index: false) - Test only the Execution phase"
+puts "  test_observation(task, build_index: false) - Test only the Observation phase"
+puts "  test_reduction(state: <state>)   - Test only the Reduction phase"
+puts "  test_decision(state: <state>, task: <task>, plan: <plan>) - Test only the Decision phase"
+puts "  test_full_run(task, show_raw: false, show_traces: false, build_index: false)"
+puts "                                     - Run full orchestrator and inspect all phases"
 puts "  create_tracking_orchestrator     - Create orchestrator that tracks phases"
 puts "  show_phases                       - List all available phases"
 puts "  show_phase_history(orch)          - Show phase transition history"
@@ -1296,10 +1976,19 @@ puts "  show_raw_responses(orch, limit:500) - Show raw LLM responses"
 puts "  read_traces(limit: 20)            - Read trace file for phase events"
 puts ""
 puts "Example usage:"
-puts "  ctx = setup_context"
-puts "  show_phases"
+puts "  # Test individual phases:"
+puts "  test_classifying('add a function')"
+puts "  test_planning('read README.md')"
+puts "  test_execution('read README.md')"
+puts ""
+puts "  # Test full run (recommended):"
+puts "  orch = test_full_run('what is this repo about?')"
+puts "  # Or with options:"
+puts "  orch = test_full_run('read README.md', show_raw: true, show_traces: true)"
+puts ""
+puts "  # Manual inspection:"
 puts "  orch = create_tracking_orchestrator"
-puts "  state = orch.run('create a calculator.rb with add, substract, multiply and divide methods')"
+puts "  state = orch.run('create a calculator.rb')"
 puts "  show_phase_results(orch)          # See detailed results from each phase"
 puts "  show_phase_history(orch)          # See phase transitions"
 puts "  inspect_state(orch)                # See overall state summary"

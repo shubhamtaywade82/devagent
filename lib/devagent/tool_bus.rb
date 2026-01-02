@@ -46,9 +46,69 @@ module Devagent
       guard_path!(relative_path)
       full = File.join(context.repo_path, relative_path)
       context.tracer.event("read_file", path: relative_path)
-      content = File.exist?(full) ? File.read(full, encoding: "UTF-8") : ""
 
-      { "path" => relative_path, "content" => content }
+      unless File.exist?(full)
+        return { "path" => relative_path, "content" => "" }
+      end
+
+      # Get file size and check if we should read in chunks
+      file_size = File.size(full)
+      max_file_size = context.config.dig("auto", "max_file_size_bytes") || 100_000 # Default 100KB
+      chunk_size = context.config.dig("auto", "file_chunk_size") || 50_000 # Default 50KB chunks
+
+      if file_size > max_file_size
+        # Read file in chunks (read up to max_file_size bytes)
+        chunks = []
+        total_read = 0
+        chunk_index = 0
+
+        File.open(full, "r:UTF-8") do |file|
+          while total_read < max_file_size && !file.eof?
+            remaining = max_file_size - total_read
+            read_size = [chunk_size, remaining].min
+            chunk = file.read(read_size)
+            break if chunk.nil? || chunk.empty?
+
+            chunks << {
+              "chunk_index" => chunk_index,
+              "start_byte" => total_read,
+              "end_byte" => total_read + chunk.bytesize,
+              "content" => chunk
+            }
+
+            total_read += chunk.bytesize
+            chunk_index += 1
+            break if total_read >= max_file_size
+          end
+        end
+
+        # Get file stats (count total lines efficiently)
+        total_lines = 0
+        File.foreach(full) { total_lines += 1 }
+        lines_read = chunks.sum { |c| c["content"].lines.count }
+
+        {
+          "path" => relative_path,
+          "content" => chunks.first&.dig("content") || "", # Return first chunk as main content
+          "truncated" => true,
+          "file_size_bytes" => file_size,
+          "max_file_size_bytes" => max_file_size,
+          "chunks_read" => chunks.size,
+          "bytes_read" => total_read,
+          "total_lines" => total_lines,
+          "lines_read" => lines_read,
+          "chunks" => chunks
+        }
+      else
+        # Read entire file for small files
+        content = File.read(full, encoding: "UTF-8")
+        {
+          "path" => relative_path,
+          "content" => content,
+          "truncated" => false,
+          "file_size_bytes" => file_size
+        }
+      end
     end
 
     def write_file(args)

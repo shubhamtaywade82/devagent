@@ -134,8 +134,21 @@ module Devagent
 
           # Check if we should fallback for EXPLANATION questions that need file access
           # If planning fails, fall back to indexing + direct answer (simpler approach)
+          # But only if the plan actually failed to parse (indicated by empty plan_id or invalid assumptions)
+          plan_failed_to_parse = plan.plan_id.to_s.empty? ||
+                                 plan.assumptions.include?("invalid plan JSON/schema")
+
           if question_needs_file_access?(task) && %w[EXPLANATION GENERAL].include?(state.intent)
-            if plan.confidence.to_f < 0.3 || plan.steps.empty?
+            # Only trigger fallback if plan actually failed to parse, not just low confidence
+            if plan_failed_to_parse
+              unless quiet?
+                streamer.say("Planning failed to parse. Falling back to indexing for explanation...",
+                             level: :warn)
+              end
+              use_repo_context = question_about_repo?(task)
+              return answer_unactionable(task, state.intent_confidence, use_repo_context: use_repo_context)
+            elsif plan.confidence.to_f < 0.3 && plan.steps.empty?
+              # Only fallback if both low confidence AND no steps (not just low confidence)
               unless quiet?
                 streamer.say("Planning generated low confidence for explanation question. Falling back to indexing...",
                              level: :warn)
@@ -823,6 +836,14 @@ module Devagent
       if state.cycle.to_i == 0 && !has_commands
         reads = plan.steps.count { |s| %w[fs.read fs_read].include?(s["action"].to_s) }
         raise Error, "too many reads in first plan" if reads > 1
+      end
+
+      # Enforce: exec.run steps must have a command
+      plan.steps.each do |s|
+        next unless %w[exec.run run_command run_tests].include?(s["action"].to_s)
+
+        cmd = s["command"].to_s.strip
+        raise Error, "exec.run step #{s['step_id']} requires a 'command' field" if cmd.empty?
       end
 
       # Enforce: every fs.write depends on a prior fs.read of the same path.
