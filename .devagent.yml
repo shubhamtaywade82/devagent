@@ -55,17 +55,11 @@ auto:
     - "rake"
     - "rspec"
     - "make"
+    - "mkdir"
+  # Allowlist: allow all files by default (denylist will block specific paths)
+  # Use "**/*" to allow everything, or specify specific patterns for restrictive access
   allowlist:
-    - "app/**"
-    - "lib/**"
-    - "spec/**"
-    - "config/**"
-    - "db/**"
-    - "src/**"
-    - "bin/**"
-    - "exe/**"
-    - "README*" # Allow reading documentation files (works for any project type)
-    - "docs/**" # Allow reading documentation directories
+    - "**/*" # Allow all files and directories (denylist will still block specific paths)
   denylist:
     - ".git/**"
     - "node_modules/**"

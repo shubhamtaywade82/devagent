@@ -118,7 +118,7 @@ module Devagent
             visible_tools = Array(visible_tools).reject { |t| t.respond_to?(:category) && t.category.to_s == "git" }
           end
 
-          # Use new Planning::Planner with hard contract
+            # Use new Planning::Planner with hard contract
           begin
             new_plan = with_spinner("Planning") do
               @new_planner.call(task)
@@ -132,11 +132,26 @@ module Devagent
                                          steps: plan.steps)
             streamer.say("Plan: #{plan.goal} (#{new_plan.confidence}%)") if plan.goal && !quiet?
 
+            # Debug: log plan steps for troubleshooting
+            unless quiet?
+              plan.steps.each do |step|
+                context.tracer.event("plan_step", step_id: step["step_id"], action: step["action"],
+                                           path: step["path"], command: step["command"])
+              end
+            end
+
             # Validate plan (hard contract - no fallbacks)
             begin
               validate_plan!(state, plan, visible_tools: visible_tools)
             rescue StandardError => e
               streamer.say("PLAN_REJECTED: #{e.message}", level: :error) unless quiet?
+              # Log the invalid plan steps for debugging
+              unless quiet?
+                streamer.say("Plan steps were:", level: :warn)
+                plan.steps.each do |step|
+                  streamer.say("  Step #{step['step_id']}: #{step['action']} - path: #{step['path']}, command: #{step['command']}", level: :warn)
+                end
+              end
               state.record_error(signature: "plan_rejected", message: e.message)
               state.record_observation({ "type" => "PLAN_REJECTED", "message" => e.message })
               raise PlanningFailed, "Plan validation failed: #{e.message}"
@@ -798,7 +813,11 @@ module Devagent
       # Enforce: every fs.write depends on a prior fs.read of the same path.
       reads = {}
       plan.steps.each do |s|
-        reads[s["step_id"]] = s["path"].to_s if %w[fs.read fs_read].include?(s["action"].to_s)
+        if %w[fs.read fs_read].include?(s["action"].to_s)
+          path = s["path"].to_s
+          normalized_path = normalize_path_for_validation(path)
+          reads[s["step_id"]] = normalized_path
+        end
       end
 
       # Enforce: fs.read must only target existing files.
@@ -809,42 +828,86 @@ module Devagent
         path = s["path"].to_s
         raise Error, "fs.read path required" if path.empty?
 
-        full = File.join(context.repo_path.to_s, path)
+        normalized_path = normalize_path_for_validation(path)
+        full = File.join(context.repo_path.to_s, normalized_path)
         next if File.exist?(full)
 
-        state.record_observation({ "type" => "FILE_MISSING", "path" => path })
-        raise Error, "fs.read on non-existent file (use fs.create for new files): #{path}"
+        state.record_observation({ "type" => "FILE_MISSING", "path" => normalized_path })
+        raise Error, "fs.read on non-existent file (use fs.create for new files): #{normalized_path}"
       end
 
       # Enforce: fs.create must only target non-existent files, and should not require dependencies.
+      creates = {}
       plan.steps.each do |s|
         next unless %w[fs.create fs_create].include?(s["action"].to_s)
 
         path = s["path"].to_s
         raise Error, "fs.create path required" if path.empty?
 
-        full = File.join(context.repo_path.to_s, path)
-        raise Error, "fs.create target already exists: #{path}" if File.exist?(full)
+        # Normalize path for comparison (remove ./ prefix, handle leading /)
+        normalized_path = normalize_path_for_validation(path)
+
+        full = File.join(context.repo_path.to_s, normalized_path)
+        raise Error, "fs.create target already exists: #{normalized_path}" if File.exist?(full)
+
+        # Store normalized path for conflict checking
+
+        creates[s["step_id"]] = normalized_path
       end
 
+      # Enforce: fs.write validation (file must exist, no conflict with fs.create, must depend on fs.read)
       plan.steps.each do |s|
         next unless %w[fs.write fs_write].include?(s["action"].to_s)
 
         path = s["path"].to_s
         raise Error, "fs.write path required" if path.empty?
 
-        full = File.join(context.repo_path.to_s, path)
-        raise Error, "fs.write cannot create new files; use fs.create: #{path}" unless File.exist?(full)
+        # Normalize path for comparison (remove ./ prefix, handle leading /)
+        normalized_path = normalize_path_for_validation(path)
+
+        # Check if any fs.create step targets the same path (compare normalized paths)
+        conflicting_create = creates.find { |_step_id, create_path| create_path == normalized_path }
+        if conflicting_create
+          raise Error, "plan cannot use both fs.create and fs.write for the same file: #{normalized_path}. Use fs.create with content field instead."
+        end
+
+        full = File.join(context.repo_path.to_s, normalized_path)
+        raise Error, "fs.write cannot create new files; use fs.create: #{normalized_path}" unless File.exist?(full)
 
         deps = Array(s["depends_on"]).map(&:to_i)
         dep_paths = deps.filter_map { |id| reads[id] }
-        raise Error, "fs.write must depend_on prior fs.read of same path (#{path})" unless dep_paths.include?(path)
+        raise Error, "fs.write must depend_on prior fs.read of same path (#{normalized_path})" unless dep_paths.include?(normalized_path)
       end
 
       # Only fingerprint AFTER all validation checks pass.
       fp = fingerprint_plan(plan)
       raise Error, "plan repeated without progress" if state.plan_fingerprints.include?(fp)
       state.plan_fingerprints << fp
+    end
+
+    def normalize_path_for_validation(path)
+      # Normalize path for comparison: remove ./ prefix and handle leading /
+      normalized = path.to_s.strip
+      return normalized if normalized.empty?
+
+      # Remove ./ prefix
+      normalized = normalized.sub(/\A\.\//, "")
+
+      # If path starts with /, try to normalize it (but be conservative)
+      if normalized.start_with?("/")
+        # Check if it's clearly a system path - don't normalize these
+        system_paths = %w[/etc /usr /var /tmp /opt /home /root /bin /sbin /lib /sys /proc /dev /mnt /media]
+        return normalized if system_paths.any? { |sys| normalized.start_with?(sys + "/") || normalized == sys }
+
+        # Try normalizing: remove leading / and check if it would be inside repo
+        test_path = normalized.sub(/\A\//, "")
+        test_absolute = File.expand_path(File.join(context.repo_path.to_s, test_path))
+        repo_root = File.expand_path(context.repo_path.to_s)
+        # Only normalize if the test path would be inside the repo
+        normalized = test_path if test_absolute.start_with?(repo_root)
+      end
+
+      normalized
     end
 
     def fingerprint_plan(plan)

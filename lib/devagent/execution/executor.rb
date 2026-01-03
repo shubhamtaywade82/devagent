@@ -11,8 +11,8 @@ module Devagent
       def initialize(repo_path:, context:)
         @repo_path = repo_path
         @context = context
-        # Force executor to use qwen2.5-coder:7b
-        @executor_model = "qwen2.5-coder:7b"
+        # Force executor to use nemesis-coder
+        @executor_model = "nemesis-coder"
       end
 
       def call(plan)
@@ -54,14 +54,24 @@ module Devagent
 
           # Read original file
           original = context.tool_bus.read_file("path" => path.to_s).fetch("content")
-          # Generate diff using diff generator
-          diff = DiffGenerator.new(context).generate(
-            path: path.to_s,
-            original: original,
-            goal: plan.goal.to_s,
-            reason: (step["reason"] || step[:reason]).to_s,
-            file_exists: true
-          )
+          # Generate diff using diff generator with executor's model
+          # Temporarily override developer_model to use executor_model
+          original_dev_model = context.config["developer_model"]
+          context.config["developer_model"] = executor_model
+          # Clear LLM cache for developer role to use new model
+          context.llm_cache.delete(:developer) if context.llm_cache
+          begin
+            diff = DiffGenerator.new(context).generate(
+              path: path.to_s,
+              original: original,
+              goal: plan.goal.to_s,
+              reason: (step["reason"] || step[:reason]).to_s,
+              file_exists: true
+            )
+          ensure
+            context.config["developer_model"] = original_dev_model
+            context.llm_cache.delete(:developer) if context.llm_cache
+          end
           context.tool_bus.invoke("type" => "fs.write_diff", "args" => { "path" => path.to_s, "diff" => diff })
         when "fs.delete", "fs_delete"
           raise Devagent::Error, "path required for fs.delete" if path.to_s.empty?

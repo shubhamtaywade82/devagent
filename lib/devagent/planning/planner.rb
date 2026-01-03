@@ -13,8 +13,9 @@ module Devagent
       def initialize(repo_path:, context:)
         @repo_path = repo_path
         @context = context
-        # Force planner to use llama3.1:8b
-        @planner_model = "llama3.1:8b"
+        # Try to use llama3.1:8b, but fall back to configured planner_model if not available
+        @preferred_model = "llama3.1:8b"
+        @planner_model = context.config["planner_model"] || "llama3.1:8b"
       end
 
       def call(user_prompt)
@@ -35,7 +36,7 @@ module Devagent
 
       private
 
-      attr_reader :repo_path, :context, :planner_model, :user_prompt
+      attr_reader :repo_path, :context, :planner_model, :preferred_model, :user_prompt
 
       def repo_empty?
         # Check if repo has any code files (excluding .git, node_modules, etc.)
@@ -53,12 +54,27 @@ module Devagent
       def query_planner(user_prompt, is_empty)
         prompt = build_prompt(user_prompt, is_empty)
 
-        # Use context.query but override the model to use planner_model
-        # We need to temporarily override the planner_model in config
+        # Try preferred model first, fall back to configured model if it fails
         original_planner_model = context.config["planner_model"]
-        context.config["planner_model"] = planner_model
+
+        # Try preferred model first
+        context.config["planner_model"] = preferred_model
+        # Clear LLM cache to force new model
+        context.llm_cache.delete(:planner) if context.llm_cache
 
         begin
+          context.query(
+            role: :planner,
+            prompt: prompt,
+            stream: false,
+            params: { temperature: 0.1 }
+          )
+        rescue StandardError
+          # If preferred model fails, try configured model
+          raise unless preferred_model != planner_model
+
+          context.config["planner_model"] = planner_model
+          context.llm_cache.delete(:planner) if context.llm_cache
           context.query(
             role: :planner,
             prompt: prompt,
@@ -68,6 +84,7 @@ module Devagent
         ensure
           # Restore original model
           context.config["planner_model"] = original_planner_model
+          context.llm_cache.delete(:planner) if context.llm_cache
         end
       end
 
@@ -94,7 +111,22 @@ module Devagent
           - Return VALID JSON only - no markdown code blocks, no extra text
           - Each step must have: step_id (integer >= 1), action (string), reason (string), depends_on (array of integers)
           - Actions: fs.read, fs.write, fs.create, fs.delete, exec.run
-          - For exec.run steps, include 'command' field with full command string
+
+          Filesystem semantics (CRITICAL):
+          - fs.read: ONLY for files that ALREADY EXIST. Never use fs.read on files that don't exist.
+          - fs.create: ONLY for creating NEW files that don't exist yet. MUST include 'content' field with the complete file content. NEVER use fs.write after fs.create for the same file - fs.create already includes the content.
+          - fs.write: ONLY for editing EXISTING files. Must depend_on a prior fs.read of the same path. NEVER use fs.write on a file that doesn't exist yet - use fs.create instead.
+          - fs.delete: ONLY for deleting EXISTING files.
+          - CRITICAL: For new files, use ONLY fs.create with a 'content' field. Do NOT use both fs.create and fs.write for the same file path.
+
+          Command execution:
+          - exec.run: For running shell commands (tests, linters, etc.).
+          - CRITICAL: exec.run steps MUST include a 'command' field with the full command string (e.g., "bundle exec rubocop", "npm test", "rspec").
+          - For diagnostic/linter commands (rubocop, eslint, etc.) that return non-zero exit codes when issues are found, you MUST set 'accepted_exit_codes: [0, 1]' or 'allow_failure: true'. These commands are successful even if they find issues.
+          - Example exec.run step for rubocop: {"step_id": 1, "action": "exec.run", "command": "bundle exec rubocop", "accepted_exit_codes": [0, 1], "reason": "Run rubocop to check code style", "depends_on": []}
+          - IMPORTANT: When the task is to "run [command] and summarize/analyze", you should ONLY use exec.run. The command output will be automatically available - you do NOT need to read any files. Do NOT create fs.read steps for command output files.
+          - NEVER use fs.read to read command output files. Command output is captured automatically when you use exec.run.
+
           #{empty_repo_instruction}
           Task:
           #{user_prompt}
