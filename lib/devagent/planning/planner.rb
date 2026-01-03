@@ -334,13 +334,19 @@ module Devagent
           - Example: If you need to know rubocop options, first run: {"step_id": 1, "action": "exec.run", "command": "rubocop --help", "reason": "Discover rubocop options", "depends_on": []}
           - Then use the discovered options in subsequent steps.
           - For diagnostic/linter commands (rubocop, eslint, etc.) that return non-zero exit codes when issues are found, you MUST set 'accepted_exit_codes: [0, 1]' or 'allow_failure: true'. These commands are successful even if they find issues.
-          - CRITICAL: When rubocop (or other linters) finds issues, you MUST fix them. Use one of these approaches:
-            * Option 1 (preferred): Use rubocop's auto-correct: {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop -a playground/file.rb", "reason": "Auto-fix rubocop violations", "depends_on": [1]}
-            * Option 2: Read the rubocop output, then use fs.write to fix the issues manually
+          - CRITICAL RULE: When you run rubocop to check code style, you MUST ALWAYS follow it with a step to auto-fix issues using 'rubocop -a'. Never run rubocop without following up with auto-fix.
+          - MANDATORY PATTERN: If your plan includes "exec.run" with "rubocop" (without -a), you MUST also include a subsequent step with "rubocop -a" to fix any issues found.
+          - Example: If step 2 runs "bundle exec rubocop file.rb", then step 3 MUST run "bundle exec rubocop -a file.rb", and step 4 should verify with "bundle exec rubocop file.rb" again.
+          - The -a flag tells rubocop to automatically correct violations. This is the preferred method - it's faster and more reliable than manual fixes.
+          - Step-by-step pattern:
+            * Step 1: Run rubocop to check: {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Check for style issues", "depends_on": []}
+            * Step 2: Run rubocop -a to auto-fix: {"step_id": 3, "action": "exec.run", "command": "bundle exec rubocop -a playground/file.rb", "reason": "Auto-fix rubocop violations", "depends_on": []}
+            * Step 3: Run rubocop again to verify: {"step_id": 4, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Verify all issues are fixed", "depends_on": [3]}
+          - If rubocop -a doesn't fix all issues (rare), then read the output and use fs.write to fix remaining issues manually
           - Example fs.read + fs.write pattern with rubocop fix (for EXISTING files):
             {"step_id": 1, "action": "fs.read", "path": "playground/file.rb", "reason": "Read file to modify", "depends_on": []},
             {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Check for style issues", "depends_on": []},
-            {"step_id": 3, "action": "exec.run", "command": "bundle exec rubocop -a playground/file.rb", "reason": "Auto-fix rubocop violations", "depends_on": [1]},
+            {"step_id": 3, "action": "exec.run", "command": "bundle exec rubocop -a playground/file.rb", "reason": "Auto-fix rubocop violations", "depends_on": []},
             {"step_id": 4, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Verify all issues are fixed", "depends_on": [3]}
             Note: Step 3 runs rubocop -a (auto-correct) which modifies the file. Step 4 verifies the fixes.
           - Alternative pattern if auto-correct doesn't work: Read rubocop output, then use fs.write to fix issues manually:
