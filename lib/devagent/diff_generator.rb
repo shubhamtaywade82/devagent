@@ -59,6 +59,12 @@ module Devagent
       # Remove markdown code blocks if present
       diff = diff.gsub(/^```(?:diff|unified)?\s*\n/, "").gsub(/\n```\s*$/, "").strip
 
+      # Validate and fix diff format before fallback logic
+      if diff.include?("@@") || diff.include?("---") || diff.include?("+++")
+        diff = validate_and_fix_diff(diff, path,
+                                     original)
+      end
+
       # If diff is missing @@ hunk markers, construct a proper diff as fallback
       unless diff.include?("@@")
         # The LLM failed to generate a proper diff format
@@ -110,11 +116,46 @@ module Devagent
         end
       end
 
-      diff
+      # Final validation before returning
+      validate_and_fix_diff(diff, path, original)
     end
 
     private
 
     attr_reader :context
+
+    # Validate and fix diff format to ensure it can be applied
+    def validate_and_fix_diff(diff, path, original)
+      return diff if diff.strip.empty?
+
+      lines = diff.lines
+      original_lines = original.lines
+
+      # Check if diff has proper headers
+      has_headers = lines.first&.start_with?("---") && lines[1]&.start_with?("+++")
+
+      unless has_headers
+        # Add headers if missing
+        diff = "--- a/#{path}\n+++ b/#{path}\n#{diff}"
+        lines = diff.lines
+      end
+
+      # Check if diff has hunk markers
+      has_hunk = lines.any? { |line| line.start_with?("@@") }
+
+      # If diff has content but no hunk markers, try to add them
+      # Otherwise, the existing fallback logic below will handle it
+      if !has_hunk && diff.strip.empty?
+        # No changes needed - return a no-op diff
+        hunk_count = original_lines.size
+        hunk_lines = original_lines.map { |line| " #{line}" }.join
+        return "--- a/#{path}\n+++ b/#{path}\n@@ -1,#{hunk_count} +1,#{hunk_count} @@\n#{hunk_lines}"
+      end
+
+      # Ensure diff ends with newline (git apply requires this)
+      diff += "\n" unless diff.end_with?("\n")
+
+      diff
+    end
   end
 end

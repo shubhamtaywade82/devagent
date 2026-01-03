@@ -165,8 +165,18 @@ module Devagent
 
       # We intentionally use git apply because it is the most reliable diff applier
       # for unified diffs and keeps behavior deterministic.
-      IO.popen(["git", "-C", context.repo_path, "apply", "--whitespace=nowarn", "-"], "w") { |io| io.write(diff) }
-      raise Error, "diff apply failed" unless $CHILD_STATUS&.success?
+      stderr_output = ""
+      IO.popen(["git", "-C", context.repo_path, "apply", "--whitespace=nowarn", "-"], "w+", err: [:child, :out]) do |io|
+        io.write(diff)
+        io.close_write
+        stderr_output = io.read
+      end
+
+      unless $CHILD_STATUS&.success?
+        # Log the diff and error for debugging
+        context.tracer.event("diff_apply_failed", path: relative_path, error: stderr_output, diff_preview: diff.lines.first(10).join) if context.respond_to?(:tracer)
+        raise Error, "diff apply failed: #{stderr_output.strip.empty? ? 'unknown error' : stderr_output.strip}"
+      end
 
       @changes_made = true
       { "applied" => true }

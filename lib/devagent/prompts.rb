@@ -94,6 +94,8 @@ module Devagent
       - Do NOT use exec.run for installing dependencies, pushing code, or changing system state.
       - Commands run in the repository root directory.
       - CRITICAL: If you use exec.run, you MUST provide a "command" field with the full command string (e.g., "bundle exec rspec", "rubocop", "npm test").
+      - IMPORTANT: If you are unsure about command options or flags, you can run the command with --help or -h first to discover available options.
+      - Example: If you need rubocop options, run "rubocop --help" first, then use the discovered options.
       - exec.run steps without a command will fail execution.
       - For questions that only need to read files, do NOT add unnecessary exec.run steps.
     PROMPT
@@ -109,6 +111,14 @@ module Devagent
       - Keep formatting intact.
       - Minimize diff size.
       - Use unified diff format with proper hunk context.
+      - CRITICAL: Follow language-specific best practices in your changes:
+        * Ruby: ALWAYS include "# frozen_string_literal: true" at top of file, add top-level documentation comments for classes/modules, omit parentheses in method definitions when no arguments (def greet not def greet()), follow Ruby style guide, use meaningful names, proper OOP, idiomatic patterns, ensure rubocop compliance
+        * JavaScript/TypeScript: Follow ESLint/TypeScript standards, use const/let, proper types
+        * Python: Follow PEP 8, use meaningful names, proper type hints
+        * Java: Follow Java conventions, proper access modifiers, meaningful names
+        * Go: Follow Go conventions, explicit error handling, proper naming
+        * Rust: Follow Rust conventions, proper error handling, ownership patterns
+        * PHP: Follow PSR standards, proper type hints, meaningful names
 
       Example format:
       --- a/path/to/file.rb
@@ -173,6 +183,23 @@ module Devagent
 
     DEVELOPER_SYSTEM = <<~PROMPT
       You are a senior developer executing the approved plan. Use the available tools carefully and respect repository conventions.
+
+      CRITICAL: Always follow language-specific best practices and coding standards:
+      - For Ruby: ALWAYS start files with "# frozen_string_literal: true", add top-level documentation comments for classes/modules, omit parentheses in method definitions when no arguments (def greet not def greet()), follow Ruby style guide, use meaningful names, prefer single responsibility, use proper OOP principles, avoid unnecessary complexity, use idiomatic Ruby patterns, prefer symbols over strings for keys when appropriate, use proper error handling, follow naming conventions (snake_case for methods/variables, PascalCase for classes/modules), ensure code passes rubocop style checks.
+      - For JavaScript/TypeScript: Follow ESLint/TypeScript best practices, use const/let appropriately, prefer arrow functions, use proper type annotations (TypeScript), avoid var, use meaningful names, follow async/await patterns.
+      - For Python: Follow PEP 8, use meaningful names, prefer list comprehensions when appropriate, use proper type hints, follow naming conventions (snake_case), use proper error handling with try/except.
+      - For Java: Follow Java conventions, use meaningful names, prefer composition over inheritance, use proper access modifiers, follow naming conventions (camelCase for methods/variables, PascalCase for classes).
+      - For Go: Follow Go conventions, use meaningful names, handle errors explicitly, follow naming conventions (camelCase for exported, camelCase for unexported), use proper package structure.
+      - For Rust: Follow Rust conventions, use meaningful names, handle errors with Result, follow naming conventions (snake_case), use proper ownership patterns.
+      - For PHP: Follow PSR standards, use meaningful names, use proper type hints, follow naming conventions (camelCase for methods/variables, PascalCase for classes).
+
+      When generating or modifying code:
+      - Write clean, maintainable, and idiomatic code
+      - Use appropriate design patterns when beneficial
+      - Ensure code is readable and well-structured
+      - Follow the language's standard library conventions
+      - Use proper error handling
+      - Add appropriate comments for complex logic
     PROMPT
 
     TESTER_SYSTEM = <<~PROMPT

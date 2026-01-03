@@ -251,15 +251,27 @@ module Devagent
           Filesystem semantics (CRITICAL):
           - fs.read: ONLY for files that ALREADY EXIST. Never use fs.read on files that don't exist.
           - fs.create: ONLY for creating NEW files that don't exist yet. MUST include 'content' field with the complete file content. NEVER use fs.write after fs.create for the same file - fs.create already includes the content.
-          - fs.write: ONLY for editing EXISTING files. Must depend_on a prior fs.read of the same path. NEVER use fs.write on a file that doesn't exist yet - use fs.create instead.
+          - fs.write: ONLY for editing EXISTING files.
+            * CRITICAL: Every fs.write step MUST have a "depends_on" array that includes the step_id of the fs.read step that reads the SAME file path.
+            * Example: If step 1 is "fs.read" for "playground/file.rb", then step 3 "fs.write" for "playground/file.rb" MUST have "depends_on": [1]
+            * The path in fs.write must match the path in the fs.read step (they will be normalized, so "/playground/file.rb" and "playground/file.rb" are the same)
+            * NEVER use fs.write on a file that doesn't exist yet - use fs.create instead.
           - fs.delete: ONLY for deleting EXISTING files.
           - CRITICAL: For new files, use ONLY fs.create with a 'content' field. Do NOT use both fs.create and fs.write for the same file path.
 
           Command execution:
           - exec.run: For running shell commands (tests, linters, etc.).
           - CRITICAL: exec.run steps MUST include a 'command' field with the full command string (e.g., "bundle exec rubocop", "npm test", "rspec").
+          - IMPORTANT: If you are unsure about command options or flags, you can first run the command with --help or -h to discover available options.
+          - Example: If you need to know rubocop options, first run: {"step_id": 1, "action": "exec.run", "command": "rubocop --help", "reason": "Discover rubocop options", "depends_on": []}
+          - Then use the discovered options in subsequent steps.
           - For diagnostic/linter commands (rubocop, eslint, etc.) that return non-zero exit codes when issues are found, you MUST set 'accepted_exit_codes: [0, 1]' or 'allow_failure: true'. These commands are successful even if they find issues.
           - Example exec.run step for rubocop: {"step_id": 1, "action": "exec.run", "command": "bundle exec rubocop", "accepted_exit_codes": [0, 1], "reason": "Run rubocop to check code style", "depends_on": []}
+          - Example fs.read + fs.write pattern (CRITICAL):
+            {"step_id": 1, "action": "fs.read", "path": "playground/file.rb", "reason": "Read file to modify", "depends_on": []},
+            {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "reason": "Check style", "depends_on": []},
+            {"step_id": 3, "action": "fs.write", "path": "playground/file.rb", "reason": "Update file with improvements", "depends_on": [1]}
+            Note: Step 3 MUST have "depends_on": [1] because it writes the same file that step 1 reads.
           - IMPORTANT: When the task is to "run [command] and summarize/analyze", you should ONLY use exec.run. The command output will be automatically available - you do NOT need to read any files. Do NOT create fs.read steps for command output files.
           - NEVER use fs.read to read command output files. Command output is captured automatically when you use exec.run.
           #{retrieved_constraint}

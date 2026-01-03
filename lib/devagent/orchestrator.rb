@@ -297,6 +297,9 @@ module Devagent
         # Normalize path before using it
         normalized_path = normalize_path_for_validation(path.to_s)
         ensure_read_same_path!(state, normalized_path)
+
+        # Re-read the file to ensure we have the current content (file might have changed)
+        # This ensures the diff is generated against the actual current file state
         original = context.tool_bus.read_file("path" => normalized_path).fetch("content")
 
         # If content field is present (from converted fs.create), generate replacement diff
@@ -314,7 +317,44 @@ module Devagent
             file_exists: true
           )
         end
-        tool_invoke_with_policy(state, "fs.write_diff", "path" => normalized_path, "diff" => diff)
+
+        # Validate diff before applying (catch issues early)
+        begin
+          tool_invoke_with_policy(state, "fs.write_diff", "path" => normalized_path, "diff" => diff)
+        rescue Error => e
+          if e.message.include?("diff apply failed") || e.message.include?("patch")
+            # Diff failed to apply - try fallback: generate complete new content and write directly
+            context.tracer.event("diff_apply_failed_fallback", path: normalized_path) if context.respond_to?(:tracer)
+            
+            # Re-read file to get current content
+            current_content = context.tool_bus.read_file("path" => normalized_path).fetch("content")
+            
+            # Fallback: Generate complete new file content instead of trying to apply diff
+            # This is more reliable when diff format is problematic
+            new_content = generate_complete_file_content(
+              file_path: normalized_path,
+              original_content: current_content,
+              goal: plan.goal.to_s,
+              reason: step["reason"].to_s
+            )
+            
+            # Write the complete content directly using tool_bus.write_file (bypassing diff)
+            # This is a fallback when diff application fails
+            context.tool_bus.write_file("path" => normalized_path, "content" => new_content)
+            
+            # Record the write in state
+            state.record_observation({
+              "type" => "FILE_WRITTEN",
+              "path" => normalized_path,
+              "method" => "direct_write_fallback"
+            })
+            
+            # Return success result (execute_step expects this format)
+            return { "success" => true, "artifact" => { "path" => normalized_path, "content" => new_content } }
+          else
+            raise
+          end
+        end
       when "fs.delete", "fs_delete"
         raise Error, "path required" if path.to_s.empty?
 
@@ -330,7 +370,7 @@ module Devagent
         tokens = Shellwords.split(cmd)
         raise Error, "command required" if tokens.empty?
 
-        tool_invoke_with_policy(
+        result = tool_invoke_with_policy(
           state,
           "exec.run",
           "program" => tokens.first,
@@ -338,6 +378,26 @@ module Devagent
           "accepted_exit_codes" => step["accepted_exit_codes"],
           "allow_failure" => step["allow_failure"]
         )
+
+        # Check if command failed with "unknown option" or similar error
+        # If so, suggest running with --help
+        if result.is_a?(Hash) && result["exit_code"].to_i != 0
+          stderr = result["stderr"].to_s.downcase
+          stdout = result["stdout"].to_s.downcase
+          error_text = stderr + " " + stdout
+
+          # Check for common "unknown option" errors
+          if error_text.match?(/\b(unknown|invalid|unrecognized|illegal).*(option|flag|argument|parameter)\b/) ||
+             error_text.include?("usage:") || error_text.include?("try") || error_text.include?("--help")
+            # Command failed due to unknown option - suggest help
+            help_cmd = "#{tokens.first} --help"
+            context.tracer.event("command_unknown_option", command: cmd, suggestion: help_cmd) if context.respond_to?(:tracer)
+            # Don't fail here - let the planner retry with --help if needed
+            # The error will be recorded in state for the planner to see
+          end
+        end
+
+        result
       when "diagnostics.error_summary"
         tool_invoke_with_policy(state, "diagnostics.error_summary", "stderr" => command.to_s)
       else
@@ -970,11 +1030,11 @@ module Devagent
         is_dangerous = dangerous_system_paths.any? do |sys|
           normalized == sys || normalized == sys + "/" || normalized.start_with?(sys + "/")
         end
-        
+
         # Dangerous system paths should not be normalized - they're real system paths
         # (safety layer will reject them)
         return normalized if is_dangerous
-        
+
         # For other paths starting with / (like /lib/hello.rb), check if they're in the repo
         # Try normalizing: remove leading / and check if it would be inside repo
         test_path = normalized.sub(/\A\//, "")
@@ -1343,6 +1403,82 @@ module Devagent
       )
     end
 
+    def generate_complete_file_content(file_path:, original_content:, goal:, reason:)
+      # Generate complete new file content based on goal and reason
+      # This is used as a fallback when diff application fails
+      ext = File.extname(file_path).downcase
+      language = case ext
+                 when ".rb"
+                   "Ruby"
+                 when ".js", ".jsx"
+                   "JavaScript"
+                 when ".ts", ".tsx"
+                   "TypeScript"
+                 when ".py"
+                   "Python"
+                 when ".java"
+                   "Java"
+                 when ".go"
+                   "Go"
+                 when ".rs"
+                   "Rust"
+                 when ".php"
+                   "PHP"
+                 when ".md"
+                   "Markdown"
+                 when ".txt"
+                   "Plain text"
+                 when ".yml", ".yaml"
+                   "YAML"
+                 when ".json"
+                   "JSON"
+                 else
+                   "code"
+                 end
+
+      # Get language-specific best practices
+      best_practices = language_best_practices(language)
+
+      prompt = <<~PROMPT
+        Update the existing #{language} file at #{file_path} to follow best practices and meet the requirements.
+
+        Current file content:
+        #{original_content}
+
+        Goal: #{goal}
+        Reason: #{reason}
+
+        CRITICAL: Follow #{language} best practices and coding standards:
+        #{best_practices}
+
+        Generate the COMPLETE updated file content. Return ONLY the complete file content, no explanations, no markdown code blocks, just the raw file content.
+        The output should be the entire file with all the improvements applied.
+      PROMPT
+
+      begin
+        content = context.query(
+          role: :developer,
+          prompt: prompt,
+          stream: false,
+          params: { temperature: 0.2 }
+        ).to_s.strip
+
+        # Remove markdown code blocks if present
+        content = content.gsub(/^```(?:#{language.downcase}|ruby|javascript|typescript|python|java|go|rust|php|markdown|yaml|json|text)?\s*\n/, "")
+                        .gsub(/\n```\s*$/, "")
+                        .strip
+
+        # Ensure content is not empty
+        return original_content if content.empty?
+
+        content
+      rescue StandardError => e
+        context.tracer.event("complete_content_generation_failed", message: e.message, path: file_path) if context.respond_to?(:tracer)
+        # If generation fails, return original content (no change)
+        original_content
+      end
+    end
+
     def generate_file_content(file_path, content_description, full_task)
       # Generate file content using the developer model
       # Determine file type from extension
@@ -1376,6 +1512,9 @@ module Devagent
                    "code"
                  end
 
+      # Get language-specific best practices
+      best_practices = language_best_practices(language)
+
       prompt = <<~PROMPT
         Create a new #{language} file at #{file_path}.
 
@@ -1383,6 +1522,9 @@ module Devagent
         #{content_description}
 
         Full task: #{full_task}
+
+        CRITICAL: Follow #{language} best practices and coding standards:
+        #{best_practices}
 
         Generate the complete file content. Return ONLY the file content, no explanations, no markdown code blocks, just the raw file content.
       PROMPT
@@ -1408,6 +1550,94 @@ module Devagent
         context.tracer.event("content_generation_failed", message: e.message, path: file_path) if context.respond_to?(:tracer)
         # Fallback: generate simple content based on description
         generate_fallback_content(file_path, content_description)
+      end
+    end
+
+    def language_best_practices(language)
+      case language.downcase
+      when "ruby"
+        <<~RUBY
+          - ALWAYS start files with: # frozen_string_literal: true
+          - Add top-level documentation comments for classes and modules (use # before class/module definition)
+          - Omit parentheses in method definitions when the method doesn't accept any arguments (def greet not def greet())
+          - Follow Ruby style guide and idiomatic Ruby patterns
+          - Use meaningful names (snake_case for methods/variables, PascalCase for classes/modules)
+          - Prefer single responsibility principle
+          - Use proper OOP principles (encapsulation, inheritance, polymorphism)
+          - Use symbols over strings for hash keys when appropriate
+          - Use proper error handling (begin/rescue/ensure or exceptions)
+          - Prefer method chaining and functional style when appropriate
+          - Use proper indentation (2 spaces)
+          - Add appropriate comments for complex logic
+          - Follow Ruby naming conventions and conventions for blocks, methods, and classes
+          - Ensure code passes rubocop style checks
+        RUBY
+      when "javascript", "typescript"
+        <<~JS
+          - Follow ESLint/TypeScript best practices
+          - Use const/let appropriately (never var)
+          - Prefer arrow functions for callbacks
+          - Use proper type annotations (TypeScript)
+          - Use meaningful names (camelCase for variables/functions, PascalCase for classes)
+          - Follow async/await patterns (avoid callback hell)
+          - Use proper error handling (try/catch)
+          - Use proper indentation (2 spaces)
+          - Add appropriate comments for complex logic
+        JS
+      when "python"
+        <<~PYTHON
+          - Follow PEP 8 style guide
+          - Use meaningful names (snake_case for functions/variables, PascalCase for classes)
+          - Prefer list comprehensions when appropriate
+          - Use proper type hints
+          - Use proper error handling (try/except)
+          - Use proper indentation (4 spaces)
+          - Add appropriate comments and docstrings
+          - Follow Python naming conventions
+        PYTHON
+      when "java"
+        <<~JAVA
+          - Follow Java coding conventions
+          - Use meaningful names (camelCase for methods/variables, PascalCase for classes)
+          - Prefer composition over inheritance
+          - Use proper access modifiers (private, protected, public)
+          - Use proper error handling (try/catch, exceptions)
+          - Use proper indentation (4 spaces or tabs)
+          - Add appropriate comments and JavaDoc
+          - Follow Java naming conventions
+        JAVA
+      when "go"
+        <<~GO
+          - Follow Go conventions and idioms
+          - Use meaningful names (camelCase for exported, camelCase for unexported)
+          - Handle errors explicitly (never ignore errors)
+          - Use proper package structure
+          - Use proper indentation (tabs)
+          - Add appropriate comments
+          - Follow Go naming conventions
+        GO
+      when "rust"
+        <<~RUST
+          - Follow Rust conventions and idioms
+          - Use meaningful names (snake_case)
+          - Handle errors with Result type (never panic unless necessary)
+          - Use proper ownership patterns
+          - Use proper indentation (4 spaces)
+          - Add appropriate comments and documentation
+          - Follow Rust naming conventions
+        RUST
+      when "php"
+        <<~PHP
+          - Follow PSR standards (PSR-1, PSR-12)
+          - Use meaningful names (camelCase for methods/variables, PascalCase for classes)
+          - Use proper type hints
+          - Use proper error handling (try/catch, exceptions)
+          - Use proper indentation (4 spaces)
+          - Add appropriate comments and PHPDoc
+          - Follow PHP naming conventions
+        PHP
+      else
+        "- Use meaningful names\n- Follow language conventions\n- Use proper error handling\n- Add appropriate comments\n- Write clean, maintainable code"
       end
     end
 
