@@ -29,6 +29,8 @@ module Devagent
     :last_decision_confidence,
     :last_error_signature,
     :repeat_error_count,
+    :retrieved_files,
+    :retrieval_cached,
     keyword_init: true
   ) do
     PHASES = %i[intent planning execution observation reduction decision done halted].freeze
@@ -60,7 +62,9 @@ module Devagent
         last_decision: nil,
         last_decision_confidence: nil,
         last_error_signature: nil,
-        repeat_error_count: 0
+        repeat_error_count: 0,
+        retrieved_files: [],
+        retrieval_cached: false
       )
     end
 
@@ -94,6 +98,17 @@ module Devagent
         self.last_error_signature = signature.to_s
         self.repeat_error_count = 1
       end
+    end
+
+    # Record retrieved files (once per goal)
+    def record_retrieval(files, cached: false)
+      self.retrieved_files = Array(files)
+      self.retrieval_cached = cached
+    end
+
+    # Check if a path is in the retrieved files (or if no retrieval constraint)
+    def path_in_retrieved?(path)
+      retrieved_files.empty? || retrieved_files.include?(path.to_s)
     end
   end
 end

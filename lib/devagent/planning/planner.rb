@@ -10,22 +10,36 @@ module Devagent
     class Planner
       MIN_CONFIDENCE = 50
 
-      def initialize(repo_path:, context:)
+      # Intents that require mandatory retrieval before planning
+      RETRIEVAL_REQUIRED_INTENTS = %w[CODE_EDIT DEBUG CODE_REVIEW].freeze
+
+      def initialize(repo_path:, context:, retrieval_controller: nil)
         @repo_path = repo_path
         @context = context
+        @retrieval_controller = retrieval_controller
         # Try to use llama3.1:8b, but fall back to configured planner_model if not available
         @preferred_model = "llama3.1:8b"
         @planner_model = context.config["planner_model"] || "llama3.1:8b"
       end
 
-      def call(user_prompt)
+      # Plan with retrieval enforcement
+      #
+      # @param user_prompt [String] The user's task
+      # @param intent [String] The classified intent (optional)
+      # @return [Plan] The generated plan
+      def call(user_prompt, intent: nil)
         @user_prompt = user_prompt
+        @intent = intent
+
         # Check if repo is empty
         is_empty = repo_empty?
 
-        response = query_planner(user_prompt, is_empty)
+        # Get retrieved files (enforced for certain intents)
+        retrieved = retrieve_context(user_prompt, is_empty: is_empty, intent: intent)
 
-        plan = parse_plan(response, is_empty)
+        response = query_planner(user_prompt, is_empty, retrieved_files: retrieved)
+
+        plan = parse_plan(response, is_empty, retrieved_files: retrieved)
 
         unless plan.valid? && plan.confidence >= MIN_CONFIDENCE
           raise PlanningFailed, "Planning confidence too low: #{plan.confidence}% (minimum: #{MIN_CONFIDENCE}%)"
@@ -36,7 +50,50 @@ module Devagent
 
       private
 
-      attr_reader :repo_path, :context, :planner_model, :preferred_model, :user_prompt
+      attr_reader :retrieval_controller
+
+      # Retrieve context files based on intent and repo state
+      def retrieve_context(user_prompt, is_empty:, intent:)
+        return [] if is_empty
+
+        # If no retrieval controller, fall back to index directly
+        if retrieval_controller.nil?
+          return safe_retrieve_from_index(user_prompt)
+        end
+
+        # Check if retrieval is mandatory for this intent
+        mandatory = RETRIEVAL_REQUIRED_INTENTS.include?(intent.to_s.upcase)
+
+        result = retrieval_controller.retrieve_for_goal(
+          user_prompt,
+          intent: intent || "GENERAL",
+          limit: 6
+        )
+
+        if result[:skip_reason] == :repo_empty
+          context.tracer&.event("retrieval_skipped", reason: "repo_empty")
+          return []
+        end
+
+        if result[:skip_reason] && mandatory
+          context.tracer&.event("retrieval_required_but_skipped",
+                                reason: result[:skip_reason],
+                                intent: intent)
+        end
+
+        result[:files] || []
+      end
+
+      def safe_retrieve_from_index(user_prompt)
+        return [] unless context.respond_to?(:index)
+
+        snippets = context.index.retrieve(user_prompt, limit: 6)
+        snippets.map { |s| s["path"] }.uniq
+      rescue StandardError
+        []
+      end
+
+      attr_reader :repo_path, :context, :planner_model, :preferred_model, :user_prompt, :intent
 
       def repo_empty?
         # Check if repo has any code files (excluding .git, node_modules, etc.)
@@ -51,8 +108,8 @@ module Devagent
         !has_files
       end
 
-      def query_planner(user_prompt, is_empty)
-        prompt = build_prompt(user_prompt, is_empty)
+      def query_planner(user_prompt, is_empty, retrieved_files: [])
+        prompt = build_prompt(user_prompt, is_empty, retrieved_files: retrieved_files)
 
         # Try preferred model first, fall back to configured model if it fails
         original_planner_model = context.config["planner_model"]
@@ -88,7 +145,7 @@ module Devagent
         end
       end
 
-      def build_prompt(user_prompt, is_empty)
+      def build_prompt(user_prompt, is_empty, retrieved_files: [])
         empty_repo_instruction = if is_empty
                                    "\n\nCRITICAL: Repository is empty. You MUST:\n" \
                                      "- Set confidence >= 70\n" \
@@ -96,6 +153,21 @@ module Devagent
                                  else
                                    ""
                                  end
+
+        # Build retrieved files constraint if we have results
+        retrieved_constraint = if retrieved_files.any?
+                                 files_list = retrieved_files.map { |f| "  - #{f}" }.join("\n")
+                                 <<~RETRIEVED
+
+                                   RETRIEVED FILES (from semantic search):
+                                   #{files_list}
+
+                                   CONSTRAINT: When using fs.read, you SHOULD prefer files from this list unless the user explicitly specified a different path.
+                                   These files are semantically relevant to the task.
+                                 RETRIEVED
+                               else
+                                 ""
+                               end
 
         <<~PROMPT
           You are a PLANNING ENGINE.
@@ -126,14 +198,14 @@ module Devagent
           - Example exec.run step for rubocop: {"step_id": 1, "action": "exec.run", "command": "bundle exec rubocop", "accepted_exit_codes": [0, 1], "reason": "Run rubocop to check code style", "depends_on": []}
           - IMPORTANT: When the task is to "run [command] and summarize/analyze", you should ONLY use exec.run. The command output will be automatically available - you do NOT need to read any files. Do NOT create fs.read steps for command output files.
           - NEVER use fs.read to read command output files. Command output is captured automatically when you use exec.run.
-
+          #{retrieved_constraint}
           #{empty_repo_instruction}
           Task:
           #{user_prompt}
         PROMPT
       end
 
-      def parse_plan(response, is_empty)
+      def parse_plan(response, is_empty, retrieved_files: [])
         # Strip markdown code blocks if present
         cleaned = response.to_s
                           .gsub(/^```(?:json|ruby|javascript|typescript|python|java|go|rust|php|markdown|yaml|text)?\s*\n/, "")
@@ -182,7 +254,8 @@ module Devagent
           goal: json["goal"] || @user_prompt,
           assumptions: Array(json["assumptions"]),
           success_criteria: Array(json["success_criteria"]),
-          rollback_strategy: json["rollback_strategy"] || "None"
+          rollback_strategy: json["rollback_strategy"] || "None",
+          retrieved_files: retrieved_files
         )
       rescue JSON::ParserError => e
         raise PlanningFailed, "Planner did not return valid JSON: #{e.message}"
