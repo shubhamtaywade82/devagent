@@ -46,7 +46,18 @@ module Devagent
         response_format: response_format,
         params: { temperature: 0.0 }
       )
-      parsed = JSON.parse(raw.to_s)
+
+      # Strip markdown code blocks if present
+      cleaned = raw.to_s
+                   .gsub(/^```(?:json|ruby|javascript|typescript|python|java|go|rust|php|markdown|yaml|text)?\s*\n/, "")
+                   .gsub(/\n```\s*$/, "")
+                   .strip
+
+      # Try to extract just the JSON object if there's extra text after it
+      json_match = cleaned.match(/\{.*\}/m)
+      json_text = json_match ? json_match[0] : cleaned
+
+      parsed = JSON.parse(json_text)
       JSON::Validator.validate!(INTENT_SCHEMA, parsed)
       parsed
     rescue StandardError => e

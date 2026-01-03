@@ -134,8 +134,21 @@ module Devagent
 
           # Check if we should fallback for EXPLANATION questions that need file access
           # If planning fails, fall back to indexing + direct answer (simpler approach)
+          # But only if the plan actually failed to parse (indicated by empty plan_id or invalid assumptions)
+          plan_failed_to_parse = plan.plan_id.to_s.empty? ||
+                                 plan.assumptions.include?("invalid plan JSON/schema")
+
           if question_needs_file_access?(task) && %w[EXPLANATION GENERAL].include?(state.intent)
-            if plan.confidence.to_f < 0.3 || plan.steps.empty?
+            # Only trigger fallback if plan actually failed to parse, not just low confidence
+            if plan_failed_to_parse
+              unless quiet?
+                streamer.say("Planning failed to parse. Falling back to indexing for explanation...",
+                             level: :warn)
+              end
+              use_repo_context = question_about_repo?(task)
+              return answer_unactionable(task, state.intent_confidence, use_repo_context: use_repo_context)
+            elsif plan.confidence.to_f < 0.3 && plan.steps.empty?
+              # Only fallback if both low confidence AND no steps (not just low confidence)
               unless quiet?
                 streamer.say("Planning generated low confidence for explanation question. Falling back to indexing...",
                              level: :warn)
@@ -187,6 +200,7 @@ module Devagent
           begin
             validate_plan!(state, plan, visible_tools: visible_tools)
           rescue StandardError => e
+            streamer.say("PLAN_REJECTED: #{e.message}", level: :warn) unless quiet?
             # If validation fails for a command-checking question, try fallback
             if question_requires_command?(task)
               streamer.say("Plan validation failed. Trying fallback plan...", level: :warn) unless quiet?
@@ -824,10 +838,13 @@ module Devagent
         raise Error, "too many reads in first plan" if reads > 1
       end
 
-      fp = fingerprint_plan(plan)
-      raise Error, "plan repeated without progress" if state.plan_fingerprints.include?(fp)
+      # Enforce: exec.run steps must have a command
+      plan.steps.each do |s|
+        next unless %w[exec.run run_command run_tests].include?(s["action"].to_s)
 
-      state.plan_fingerprints << fp
+        cmd = s["command"].to_s.strip
+        raise Error, "exec.run step #{s['step_id']} requires a 'command' field" if cmd.empty?
+      end
 
       # Enforce: every fs.write depends on a prior fs.read of the same path.
       reads = {}
@@ -835,14 +852,50 @@ module Devagent
         reads[s["step_id"]] = s["path"].to_s if %w[fs.read fs_read].include?(s["action"].to_s)
       end
 
+      # Enforce: fs.read must only target existing files.
+      # For new files, the planner must use fs.create.
+      plan.steps.each do |s|
+        next unless %w[fs.read fs_read].include?(s["action"].to_s)
+
+        path = s["path"].to_s
+        raise Error, "fs.read path required" if path.empty?
+
+        full = File.join(context.repo_path.to_s, path)
+        next if File.exist?(full)
+
+        state.record_observation({ "type" => "FILE_MISSING", "path" => path })
+        raise Error, "fs.read on non-existent file (use fs.create for new files): #{path}"
+      end
+
+      # Enforce: fs.create must only target non-existent files, and should not require dependencies.
+      plan.steps.each do |s|
+        next unless %w[fs.create fs_create].include?(s["action"].to_s)
+
+        path = s["path"].to_s
+        raise Error, "fs.create path required" if path.empty?
+
+        full = File.join(context.repo_path.to_s, path)
+        raise Error, "fs.create target already exists: #{path}" if File.exist?(full)
+      end
+
       plan.steps.each do |s|
         next unless %w[fs.write fs_write].include?(s["action"].to_s)
 
         path = s["path"].to_s
+        raise Error, "fs.write path required" if path.empty?
+
+        full = File.join(context.repo_path.to_s, path)
+        raise Error, "fs.write cannot create new files; use fs.create: #{path}" unless File.exist?(full)
+
         deps = Array(s["depends_on"]).map(&:to_i)
         dep_paths = deps.filter_map { |id| reads[id] }
         raise Error, "fs.write must depend_on prior fs.read of same path (#{path})" unless dep_paths.include?(path)
       end
+
+      # Only fingerprint AFTER all validation checks pass.
+      fp = fingerprint_plan(plan)
+      raise Error, "plan repeated without progress" if state.plan_fingerprints.include?(fp)
+      state.plan_fingerprints << fp
     end
 
     def fingerprint_plan(plan)

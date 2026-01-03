@@ -23,16 +23,19 @@ module Devagent
   class Planner
     PLAN_SCHEMA_V2 = {
       "type" => "object",
-      "required" => %w[plan_id goal assumptions steps success_criteria rollback_strategy confidence],
+      # NOTE: keep schema permissive for local models; controller performs strict validation later.
+      "required" => %w[plan_id assumptions steps success_criteria rollback_strategy confidence],
       "properties" => {
         "plan_id" => { "type" => "string" },
-        "goal" => { "type" => "string" },
+        "goal" => { "type" => %w[string null] },
+        "summary" => { "type" => %w[string null] },
         "assumptions" => { "type" => "array", "items" => { "type" => "string" } },
         "steps" => {
           "type" => "array",
           "items" => {
             "type" => "object",
-            "required" => %w[step_id action path command reason depends_on],
+            # path/command/content are tool-specific; do not require them at schema-level.
+            "required" => %w[step_id action reason depends_on],
             "properties" => {
               "step_id" => { "type" => "integer", "minimum" => 1 },
               "action" => { "type" => "string" },
@@ -184,7 +187,17 @@ module Devagent
     end
 
     def parse_plan(raw)
-      json = JSON.parse(raw)
+      # Strip markdown code blocks if present
+      cleaned = raw.to_s
+                   .gsub(/^```(?:json|ruby|javascript|typescript|python|java|go|rust|php|markdown|yaml|text)?\s*\n/, "")
+                   .gsub(/\n```\s*$/, "")
+                   .strip
+
+      # Try to extract just the JSON object if there's extra text before/after it
+      json_match = cleaned.match(/\{.*\}/m)
+      json_text = json_match ? json_match[0] : cleaned
+
+      json = JSON.parse(json_text)
       JSON::Validator.validate!(PLAN_SCHEMA, json)
       json
     rescue JSON::ParserError, JSON::Schema::ValidationError => e
@@ -201,7 +214,17 @@ module Devagent
     end
 
     def parse_review(raw)
-      json = JSON.parse(raw)
+      # Strip markdown code blocks if present, and extract JSON if there's extra text
+      cleaned = raw.to_s
+                   .gsub(/^```(?:json|ruby|javascript|typescript|python|java|go|rust|php|markdown|yaml|text)?\s*\n/, "")
+                   .gsub(/\n```\s*$/, "")
+                   .strip
+
+      # Try to extract just the JSON object if there's extra text after it
+      json_match = cleaned.match(/\{.*\}/m)
+      json_text = json_match ? json_match[0] : cleaned
+
+      json = JSON.parse(json_text)
       JSON::Validator.validate!(REVIEW_SCHEMA, json)
       json
     rescue JSON::ParserError, JSON::Schema::ValidationError => e

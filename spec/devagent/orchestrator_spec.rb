@@ -7,6 +7,15 @@ RSpec.describe Devagent::Orchestrator do
   let(:streamer) { instance_double(Devagent::Streamer, say: nil, with_stream: nil) }
   let(:planner) { instance_double(Devagent::Planner) }
   let(:classifier) { instance_double(Devagent::IntentClassifier) }
+  let(:config) do
+    {
+      "auto" => {
+        "max_iterations" => 2,
+        "require_tests_green" => true,
+        "allowlist" => ["lib/**", "spec/**"]
+      }
+    }
+  end
   let(:context) do
     instance_double(
       Devagent::Context,
@@ -16,13 +25,14 @@ RSpec.describe Devagent::Orchestrator do
       tracer: tracer,
       tool_registry: tool_registry,
       tool_bus: tool_bus,
-      config: { "auto" => { "max_iterations" => 2, "require_tests_green" => true } },
+      config: config,
       plugins: []
     )
   end
   let(:session_memory) { instance_double(Devagent::SessionMemory, append: nil) }
   let(:index) { instance_double(Devagent::EmbeddingIndex, build!: nil) }
   let(:tracer) { instance_double(Devagent::Tracer, event: nil) }
+  let(:safety) { instance_double(Devagent::Safety, allowed?: true) }
   let(:tool_bus) do
     instance_double(
       Devagent::ToolBus,
@@ -30,7 +40,8 @@ RSpec.describe Devagent::Orchestrator do
       invoke: nil,
       read_file: { "path" => "file", "content" => "" },
       changes_made?: changes_made,
-      run_tests: :ok
+      run_tests: :ok,
+      safety: safety
     )
   end
   let(:tool_registry) do
@@ -77,8 +88,8 @@ RSpec.describe Devagent::Orchestrator do
         goal: "Do work",
         assumptions: [],
         steps: [
-          { "step_id" => 1, "action" => "fs.read", "path" => "file", "command" => nil, "content" => nil, "reason" => "read", "depends_on" => [0] },
-          { "step_id" => 2, "action" => "fs.write", "path" => "file", "command" => nil, "content" => nil, "reason" => "write", "depends_on" => [1] }
+          { "step_id" => 1, "action" => "fs.read", "path" => "lib/devagent/version.rb", "command" => nil, "content" => nil, "reason" => "read", "depends_on" => [0] },
+          { "step_id" => 2, "action" => "fs.write", "path" => "lib/devagent/version.rb", "command" => nil, "content" => nil, "reason" => "write", "depends_on" => [1] }
         ],
         success_criteria: ["tests pass"],
         rollback_strategy: "revert",
@@ -89,6 +100,9 @@ RSpec.describe Devagent::Orchestrator do
     before do
       allow(planner).to receive(:plan).and_return(plan)
       allow(Devagent::DecisionEngine).to receive(:new).and_return(instance_double(Devagent::DecisionEngine, decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 }))
+      # Mock File.exist? to allow plan validation to pass
+      allow(File).to receive(:exist?).and_call_original
+      allow(File).to receive(:exist?).with("/workspace/lib/devagent/version.rb").and_return(true)
     end
 
     it "executes a plan and runs tests when changes are made" do
@@ -99,8 +113,8 @@ RSpec.describe Devagent::Orchestrator do
       expect(session_memory).to have_received(:append).with("user", "build feature")
       expect(index).to have_received(:build!)
       expect(tool_bus).to have_received(:reset!).once
-      expect(tool_bus).to have_received(:invoke).with("type" => "fs.read", "args" => { "path" => "file" })
-      expect(tool_bus).to have_received(:invoke).with("type" => "fs.write_diff", "args" => hash_including("path" => "file"))
+      expect(tool_bus).to have_received(:invoke).with("type" => "fs.read", "args" => { "path" => "lib/devagent/version.rb" })
+      expect(tool_bus).to have_received(:invoke).with("type" => "fs.write_diff", "args" => hash_including("path" => "lib/devagent/version.rb"))
       expect(tool_bus).to have_received(:run_tests)
       expect(planner).to have_received(:plan).once
     end
@@ -265,6 +279,32 @@ RSpec.describe Devagent::Orchestrator do
       expect(index).not_to have_received(:build!)
       expect(tool_bus).not_to have_received(:invoke)
       expect(tool_bus).not_to have_received(:run_tests)
+    end
+
+    it "rejects broad file listing requests and lists allowed directories" do
+      # Mock directory existence and structure for allowed directories
+      allow(Dir).to receive(:exist?).and_call_original
+      allow(Dir).to receive(:exist?).with("/workspace/lib").and_return(true)
+      allow(Dir).to receive(:exist?).with("/workspace/spec").and_return(true)
+
+      orchestrator = described_class.new(context, output: output)
+      allow(orchestrator).to receive(:get_directory_structure).and_return("file1.rb\nfile2.rb")
+
+      orchestrator.run("list all files in this repository")
+
+      expect(streamer).to have_received(:say).with(a_string_matching(/Clarification needed/i), hash_including(level: :warn))
+      expect(streamer).to have_received(:say).with(a_string_matching(/Files from allowed directories/), anything)
+      expect(index).not_to have_received(:build!)
+    end
+
+    it "denies listing when requested path is not allowlisted" do
+      allow(safety).to receive(:allowed?).and_return(false)
+
+      orchestrator = described_class.new(context, output: output)
+      orchestrator.run("list files in tmp")
+
+      expect(streamer).to have_received(:say).with(a_string_matching(/Access denied/i), hash_including(level: :warn))
+      expect(index).not_to have_received(:build!)
     end
   end
 end

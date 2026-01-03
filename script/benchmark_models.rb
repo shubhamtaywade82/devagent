@@ -9,9 +9,9 @@ require_relative "../lib/devagent/ollama"
 # Default models - update these to match your installed Ollama models
 # Check available models with: curl -s http://localhost:11434/api/tags | jq -r '.models[]?.name'
 DEFAULT_MODELS = [
-  "qwen2.5-coder:7b",              # Note: may be installed as qwen2.5-coder:7b-instruct-q5_K_M
-  "llama3.1:8b-instruct-q4_K_M",   # Note: may be installed as llama3.1:8b-instruct
-  "deepseek-coder:6.7b",            # Note: may be installed as deepseek-coder:6.7b-instruct
+  "qwen2.5-coder:7b",              # NOTE: may be installed as qwen2.5-coder:7b-instruct-q5_K_M
+  "llama3.1:8b-instruct-q4_K_M",   # NOTE: may be installed as llama3.1:8b-instruct
+  "deepseek-coder:6.7b", # NOTE: may be installed as deepseek-coder:6.7b-instruct
   "mistral:7b-instruct"
 ].freeze
 
@@ -126,7 +126,9 @@ def diff_disciplined?(text)
   has_hunk = text.match?(/^@@/m)
   return false unless has_headers && has_hunk
 
-  changed = lines.count { |l| (l.start_with?("+") || l.start_with?("-")) && !l.start_with?("+++") && !l.start_with?("---") }
+  changed = lines.count do |l|
+    l.start_with?("+", "-") && !l.start_with?("+++") && !l.start_with?("---")
+  end
   changed <= 10
 end
 
@@ -157,7 +159,7 @@ if MODELS.empty?
   exit 2
 end
 
-puts "Found #{MODELS.size} model(s) to benchmark: #{MODELS.join(', ')}"
+puts "Found #{MODELS.size} model(s) to benchmark: #{MODELS.join(", ")}"
 puts ""
 
 client = Devagent::Ollama::Client.new("host" => ollama_host)
@@ -241,4 +243,3 @@ end
 
 puts "\nDevagent Model Benchmark Results"
 puts JSON.pretty_generate(results)
-

@@ -37,20 +37,51 @@ module Devagent
       You do NOT execute actions. You only produce a structured plan.
       You are currently in PLANNING phase. You may only reference tools that are allowed/visible for this phase.
 
+      CRITICAL: Your response MUST be valid JSON matching this EXACT structure:
+      {
+        "plan_id": "string (unique identifier, e.g., 'plan_123')",
+        "goal": "string (optional, brief description of the plan goal)",
+        "assumptions": ["array", "of", "strings"],
+        "steps": [
+          {
+            "step_id": 1,
+            "action": "string (tool name, e.g., 'fs.read', 'fs.write', 'exec.run')",
+            "path": "string (optional, for file operations)",
+            "command": "string (optional, for exec operations)",
+            "reason": "string (why this step is needed)",
+            "depends_on": [0]
+          }
+        ],
+        "success_criteria": ["array", "of", "strings"],
+        "rollback_strategy": "string",
+        "confidence": 0.8
+      }
+
+      REQUIRED fields: plan_id, assumptions, steps, success_criteria, rollback_strategy, confidence
+      Each step MUST have: step_id (integer >= 1), action (string), reason (string), depends_on (array of integers)
+
       Rules:
-      - Return VALID JSON only. Your response MUST be parseable JSON - no extra text before/after.
+      - Return VALID JSON only. Your response MUST be parseable JSON - no extra text before/after, no markdown code blocks.
       - steps[].action must be one of the available tools.
       - Every fs.write MUST depend_on a prior fs.read of the same path.
       - Prefer minimal steps.
       - Never assume file contents without reading.
       - If uncertain, add assumptions explicitly.
       - If task is impossible, return an empty steps array and explain in assumptions.
-      - CRITICAL: ALWAYS set confidence to a reasonable value (0.5-1.0). NEVER set confidence to 0 or below 0.3.
+      - CRITICAL: ALWAYS set confidence to a value >= 0.6 unless you are truly BLOCKED.
+      - Plans with confidence < 0.5 will be rejected by the controller.
+      - NEVER set confidence to 0 unless the task is BLOCKED / impossible.
       - Simple tasks (add comment, read file, run test) should have HIGH confidence (0.8-1.0).
       - Medium tasks should have confidence 0.6-0.8.
       - Complex tasks should have confidence 0.5-0.7.
       - For simple command execution tasks, confidence should be 0.8 or higher.
       - For simple file edits (add comment, change one line), confidence should be 0.8 or higher.
+
+      Filesystem semantics (IMPORTANT):
+      - Use fs.read ONLY for existing files.
+      - Use fs.write ONLY for editing existing files, and ONLY after fs.read of the SAME path (via depends_on).
+      - Use fs.create ONLY to create a NEW file that does NOT already exist. Do NOT fs.read first for new file creation.
+      - Never use fs.write to create new files.
 
       File reading guidance:
       - For questions about repository description/purpose, identify and read relevant documentation files (README, docs, etc.) based on what's available in the repository.
@@ -62,6 +93,9 @@ module Devagent
       - Use exec.run for tests/linters/diagnostics.
       - Do NOT use exec.run for installing dependencies, pushing code, or changing system state.
       - Commands run in the repository root directory.
+      - CRITICAL: If you use exec.run, you MUST provide a "command" field with the full command string (e.g., "bundle exec rspec", "rubocop", "npm test").
+      - exec.run steps without a command will fail execution.
+      - For questions that only need to read files, do NOT add unnecessary exec.run steps.
     PROMPT
 
     DIFF_SYSTEM = <<~PROMPT

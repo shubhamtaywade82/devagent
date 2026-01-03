@@ -14,17 +14,17 @@ Run benchmarks: `ruby script/benchmark_models.rb`
 
 ## Results Summary
 
-| Rank | Model | Total Score | Latency | JSON | Diff | Stability | Notes |
-|------|--------|-------------|---------|------|------|-----------|-------|
-| 🥇 | **qwen2.5-coder:1.5b** | **4/4** | 0.57s | ✅ | ✅ | ✅ | **Fastest + reliable** |
-| 🥈 | **qwen2.5-coder:7b-instruct-q5_K_M** | **3/4** | 4.6s | ✅ | ✅ | ✅ | **Best quality** |
-| 🥉 | **llama3.1:8b-instruct-q4_K_M** | **3/4** | 4.8s | ✅ | ✅ | ✅ | **Strong backup** |
-| 4 | **qwen2.5-coder:7b** | **3/4** | 3.7s | ✅ | ✅ | ✅ | Good all-around |
-| 5 | **llama3.2:3b** | **3/4** | 2.2s | ✅ | ❌ | ✅ | Fast but fails diff discipline |
-| 6 | **deepseek-coder:6.7b** | **3/4** | 1.6s | ✅ | ✅ | ❌ | Fastest large model, fails stability |
-| 7 | **mistral:7b-instruct** | **2/4** | 3.1s | ✅ | ❌ | ✅ | Fails diff discipline |
-| 8 | **codellama:7b-instruct** | **2/4** | 3.3s | ✅ | ❌ | ✅ | Fails diff discipline |
-| 9 | **starcoder2:3b** | **1/4** | Timeout | ❌ | ❌ | ❌ | **Avoid** - timeout issues |
+| Rank | Model                                | Total Score | Latency | JSON | Diff | Stability | Notes                                |
+| ---- | ------------------------------------ | ----------- | ------- | ---- | ---- | --------- | ------------------------------------ |
+| 🥇    | **qwen2.5-coder:1.5b**               | **4/4**     | 0.57s   | ✅    | ✅    | ✅         | **Fastest + reliable**               |
+| 🥈    | **qwen2.5-coder:7b-instruct-q5_K_M** | **3/4**     | 4.6s    | ✅    | ✅    | ✅         | **Best quality**                     |
+| 🥉    | **llama3.1:8b-instruct-q4_K_M**      | **3/4**     | 4.8s    | ✅    | ✅    | ✅         | **Strong backup**                    |
+| 4    | **qwen2.5-coder:7b**                 | **3/4**     | 3.7s    | ✅    | ✅    | ✅         | Good all-around                      |
+| 5    | **llama3.2:3b**                      | **3/4**     | 2.2s    | ✅    | ❌    | ✅         | Fast but fails diff discipline       |
+| 6    | **deepseek-coder:6.7b**              | **3/4**     | 1.6s    | ✅    | ✅    | ❌         | Fastest large model, fails stability |
+| 7    | **mistral:7b-instruct**              | **2/4**     | 3.1s    | ✅    | ❌    | ✅         | Fails diff discipline                |
+| 8    | **codellama:7b-instruct**            | **2/4**     | 3.3s    | ✅    | ❌    | ✅         | Fails diff discipline                |
+| 9    | **starcoder2:3b**                    | **1/4**     | Timeout | ❌    | ❌    | ❌         | **Avoid** - timeout issues           |
 
 ## Detailed Results
 

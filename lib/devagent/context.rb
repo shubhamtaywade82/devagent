@@ -81,10 +81,12 @@ module Devagent
           "command_allowlist" => ["bundle", "ruby", "npm", "yarn", "rubocop", "rake", "make", "git"],
           "command_timeout_seconds" => 60,
           "command_max_output_bytes" => 20_000,
+          "max_file_size_bytes" => 100_000, # Files larger than this will be read in chunks (100KB)
+          "file_chunk_size" => 50_000, # Size of each chunk when reading large files (50KB)
           "enable_git_tools" => false,
           "allowlist" => ["app/**", "lib/**", "spec/**", "config/**", "db/**", "src/**"],
-          "denylist" => [".git/**", "node_modules/**", "log/**", "tmp/**", "dist/**", "build/**", ".env*",
-                         "config/credentials*"]
+          "denylist" => [".git/**", "node_modules/**", "log/**", "tmp/**", "dist/**", "build/**", "coverage/**",
+                         ".env*", "config/credentials*"]
         },
         "memory" => { "short_term_turns" => 20 },
         "ui" => { "quiet" => false }
