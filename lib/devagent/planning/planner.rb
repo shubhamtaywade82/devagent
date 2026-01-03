@@ -52,6 +52,15 @@ module Devagent
 
       attr_reader :retrieval_controller, :repo_path, :context, :planner_model, :preferred_model, :user_prompt, :intent
 
+      # Check if we're running inside the devagent gem itself
+      def devagent_gem?
+        gem_path = File.expand_path(repo_path)
+        # Check for devagent-specific files/directories
+        File.exist?(File.join(gem_path, "lib/devagent")) &&
+          File.exist?(File.join(gem_path, ".devagent.yml")) &&
+          File.exist?(File.join(gem_path, "exe/devagent"))
+      end
+
       # Retrieve context files based on intent and repo state
       def retrieve_context(user_prompt, is_empty:, intent:)
         return [] if is_empty
@@ -122,9 +131,17 @@ module Devagent
 
         return [] if filenames.empty?
 
-        # Common locations to search (in priority order)
-        # playground/ is checked first as it's commonly used for test files
-        common_locations = %w[playground lib src app spec test tests]
+        # Determine workspace based on context
+        # If we're in the devagent gem itself, prioritize playground/
+        # Otherwise, use standard locations
+        is_devagent_gem = devagent_gem?
+        common_locations = if is_devagent_gem
+                             # In devagent gem: playground/ is the workspace
+                             %w[playground lib src app spec test tests]
+                           else
+                             # In external project: standard locations
+                             %w[lib src app spec test tests playground]
+                           end
 
         found_files = []
         filenames.each do |filename|
@@ -217,6 +234,38 @@ module Devagent
                                    ""
                                  end
 
+        # Determine workspace context
+        is_devagent_gem = devagent_gem?
+        workspace_context_note = if is_devagent_gem
+                                   <<~WORKSPACE
+                                     WORKSPACE CONTEXT (CRITICAL):
+                                     - You are running INSIDE the devagent gem itself
+                                     - For NEW files, you MUST use playground/ as the workspace directory
+                                     - Example: "playground/calculator.rb" NOT "lib/calculator.rb"
+                                     - The playground/ directory is the designated workspace for testing and examples
+                                     - Only use lib/ for files that are part of the devagent gem codebase itself
+                                   WORKSPACE
+                                 else
+                                   <<~WORKSPACE
+                                     WORKSPACE CONTEXT:
+                                     - You are running in an external project
+                                     - For NEW files, use standard project directories (lib/, src/, app/, etc.)
+                                     - Files are searched in priority order: lib/, src/, app/, spec/, test/, tests/, playground/
+                                   WORKSPACE
+                                 end
+
+        workspace_note = if is_devagent_gem
+                           "Workspace: playground/ (devagent gem context). Files are searched in priority order: playground/, lib/, src/, app/, spec/, test/, tests/, and root."
+                         else
+                           "Files are searched in priority order: lib/, src/, app/, spec/, test/, tests/, playground/, and root."
+                         end
+
+        workspace_example = if is_devagent_gem
+                              '{"step_id": 1, "action": "fs.create", "path": "playground/calculator.rb", "content": "# frozen_string_literal: true\n\n# Calculator class using OOP principles\nclass Calculator\n  def initialize\n    @result = 0\n  end\n\n  def add(value)\n    @result += value\n    self\n  end\n\n  def subtract(value)\n    @result -= value\n    self\n  end\n\n  def result\n    @result\n  end\nend", "reason": "Create calculator class with OOP", "depends_on": []},'
+                            else
+                              '{"step_id": 1, "action": "fs.create", "path": "lib/calculator.rb", "content": "# frozen_string_literal: true\n\n# Calculator class using OOP principles\nclass Calculator\n  def initialize\n    @result = 0\n  end\n\n  def add(value)\n    @result += value\n    self\n  end\n\n  def subtract(value)\n    @result -= value\n    self\n  end\n\n  def result\n    @result\n  end\nend", "reason": "Create calculator class with OOP", "depends_on": []},'
+                            end
+
         # Build retrieved files constraint if we have results
         retrieved_constraint = if retrieved_files.any?
                                  files_list = retrieved_files.map { |f| "  - #{f}" }.join("\n")
@@ -226,7 +275,7 @@ module Devagent
                                    #{files_list}
 
                                    CONSTRAINT: When using fs.read, you MUST use files from this list if they match the user's request.
-                                   Files are searched in priority order: playground/, lib/, src/, app/, spec/, test/, tests/, and root.
+                                   #{workspace_note}
                                    These files are semantically relevant to the task or match the filename mentioned by the user.
                                  RETRIEVED
                                else
@@ -248,16 +297,25 @@ module Devagent
           - Each step must have: step_id (integer >= 1), action (string), reason (string), depends_on (array of integers)
           - Actions: fs.read, fs.write, fs.create, fs.delete, exec.run
 
+          #{workspace_context_note}
+
           Filesystem semantics (CRITICAL):
           - fs.read: ONLY for files that ALREADY EXIST. Never use fs.read on files that don't exist.
-          - fs.create: ONLY for creating NEW files that don't exist yet. MUST include 'content' field with the complete file content. NEVER use fs.write after fs.create for the same file - fs.create already includes the content.
+          - fs.create: ONLY for creating NEW files that don't exist yet.
+            * MUST include 'content' field with the COMPLETE file content (the entire file, not partial).
+            * The content field must contain the full, final version of the file with all features implemented.
+            * #{is_devagent_gem ? 'CRITICAL: When in devagent gem, use playground/ directory for new files (e.g., "playground/calculator.rb" NOT "lib/calculator.rb")' : "Use appropriate project directory (lib/, src/, app/, etc.) for new files"}
+            * NEVER use fs.write after fs.create for the same file - fs.create already includes all the content.
+            * NEVER use both fs.create and fs.write for the same file path - this will be rejected.
+            * Example: {"step_id": 1, "action": "fs.create", "path": "#{is_devagent_gem ? "playground" : "lib"}/calculator.rb", "content": "# frozen_string_literal: true\n\nclass Calculator\n  # complete class implementation here\nend", "reason": "Create calculator class", "depends_on": []}
           - fs.write: ONLY for editing EXISTING files.
             * CRITICAL: Every fs.write step MUST have a "depends_on" array that includes the step_id of the fs.read step that reads the SAME file path.
             * Example: If step 1 is "fs.read" for "playground/file.rb", then step 3 "fs.write" for "playground/file.rb" MUST have "depends_on": [1]
             * The path in fs.write must match the path in the fs.read step (they will be normalized, so "/playground/file.rb" and "playground/file.rb" are the same)
             * NEVER use fs.write on a file that doesn't exist yet - use fs.create instead.
+            * NEVER use fs.write after fs.create for the same file - use fs.create with complete content instead.
           - fs.delete: ONLY for deleting EXISTING files.
-          - CRITICAL: For new files, use ONLY fs.create with a 'content' field. Do NOT use both fs.create and fs.write for the same file path.
+          - CRITICAL RULE: For new files, use ONLY fs.create with a complete 'content' field. NEVER use both fs.create and fs.write for the same file path - this will cause plan rejection.
 
           Command execution:
           - exec.run: For running shell commands (tests, linters, etc.).
@@ -267,11 +325,19 @@ module Devagent
           - Then use the discovered options in subsequent steps.
           - For diagnostic/linter commands (rubocop, eslint, etc.) that return non-zero exit codes when issues are found, you MUST set 'accepted_exit_codes: [0, 1]' or 'allow_failure: true'. These commands are successful even if they find issues.
           - Example exec.run step for rubocop: {"step_id": 1, "action": "exec.run", "command": "bundle exec rubocop", "accepted_exit_codes": [0, 1], "reason": "Run rubocop to check code style", "depends_on": []}
-          - Example fs.read + fs.write pattern (CRITICAL):
+          - Example fs.read + fs.write pattern (for EXISTING files):
             {"step_id": 1, "action": "fs.read", "path": "playground/file.rb", "reason": "Read file to modify", "depends_on": []},
             {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "reason": "Check style", "depends_on": []},
             {"step_id": 3, "action": "fs.write", "path": "playground/file.rb", "reason": "Update file with improvements", "depends_on": [1]}
             Note: Step 3 MUST have "depends_on": [1] because it writes the same file that step 1 reads.
+
+          - Example fs.create pattern (for NEW files - CRITICAL):
+            #{workspace_example}
+            {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop #{is_devagent_gem ? "playground" : "lib"}/calculator.rb", "accepted_exit_codes": [0, 1], "reason": "Check code style", "depends_on": []}
+            Note: For NEW files, use ONLY fs.create with complete content. NEVER add fs.write after fs.create for the same file.
+            #{if is_devagent_gem
+                "IMPORTANT: When working in devagent gem, use playground/ as the workspace directory for new files."
+              end}
           - IMPORTANT: When the task is to "run [command] and summarize/analyze", you should ONLY use exec.run. The command output will be automatically available - you do NOT need to read any files. Do NOT create fs.read steps for command output files.
           - NEVER use fs.read to read command output files. Command output is captured automatically when you use exec.run.
           #{retrieved_constraint}
