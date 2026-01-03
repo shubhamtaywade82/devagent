@@ -25,14 +25,19 @@ module Devagent
       JSON structure:
       {"plan_id": "string", "assumptions": [], "steps": [{"step_id": 1, "action": "tool", "path/command": "...", "reason": "...", "depends_on": []}], "success_criteria": [], "rollback_strategy": "string", "confidence": 0.8}
 
-      Actions: fs.read (existing files), fs.write (edit existing, requires depends_on fs.read), fs.create (new files with content), fs.delete, exec.run (with command field)
+      Actions:
+      - fs.read: existing files only
+      - fs.create: new files, MUST include complete "content" field
+      - fs.write: edit existing files
+      - fs.delete: remove files
+      - exec.run: shell commands, MUST include "command" field
 
-      Rules:
-      - fs.write MUST depend_on prior fs.read of same path
-      - fs.create for NEW files only, include full content
-      - exec.run requires "command" field
-      - Confidence: simple=0.8-1.0, medium=0.6-0.8, complex=0.5-0.7
-      - Read files before assuming contents
+      CRITICAL RULES (violations cause plan rejection):
+      1. fs.write MUST have depends_on pointing to fs.read of SAME path
+      2. Never use fs.write after fs.create for same file
+      3. Never use fs.create for existing files
+
+      Confidence: simple=0.8-1.0, medium=0.6-0.8, complex=0.5-0.7
     PROMPT
 
     DIFF_SYSTEM = <<~PROMPT

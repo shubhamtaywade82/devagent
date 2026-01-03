@@ -253,12 +253,13 @@ module Devagent
         parts << "- exec.run: shell commands (requires 'command' field)"
         parts << ""
 
-        # Key rules
-        parts << "Rules:"
-        parts << "- Never fs.write after fs.create for same file"
-        parts << "- Linters (rubocop/eslint): use accepted_exit_codes: [0, 1]"
-        parts << "- After rubocop check, run 'rubocop -a' to auto-fix"
-        parts << "- Command output is captured automatically - no fs.read needed"
+        # Key rules - CRITICAL section for rules that cause plan rejection
+        parts << "CRITICAL RULES (violations = plan rejection):"
+        parts << "1. fs.write MUST depends_on the step_id of fs.read for SAME path"
+        parts << "2. fs.create for new files only (with complete content)"
+        parts << "3. Never fs.write after fs.create for same file"
+        parts << ""
+        parts << "Linter tips: accepted_exit_codes: [0, 1], then 'rubocop -a' to auto-fix"
         parts << ""
 
         # Retrieved files
