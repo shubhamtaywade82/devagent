@@ -26,10 +26,12 @@ module Devagent
       #
       # @param user_prompt [String] The user's task
       # @param intent [String] The classified intent (optional)
+      # @param previous_errors [Array<String>] Errors from previous attempts (optional)
       # @return [Plan] The generated plan
-      def call(user_prompt, intent: nil)
+      def call(user_prompt, intent: nil, previous_errors: [])
         @user_prompt = user_prompt
         @intent = intent
+        @previous_errors = previous_errors || []
 
         # Check if repo is empty
         is_empty = repo_empty?
@@ -50,7 +52,8 @@ module Devagent
 
       private
 
-      attr_reader :retrieval_controller, :repo_path, :context, :planner_model, :preferred_model, :user_prompt, :intent
+      attr_reader :retrieval_controller, :repo_path, :context, :planner_model, :preferred_model, :user_prompt, :intent,
+                  :previous_errors
 
       # Check if we're running inside the devagent gem itself
       def devagent_gem?
@@ -282,8 +285,37 @@ module Devagent
                                  ""
                                end
 
+        # Build previous errors section if we have any
+        previous_errors_section = if @previous_errors.any?
+                                    errors_text = @previous_errors.map { |e| "  - #{e}" }.join("\n")
+                                    # Check if any errors mention missing linting tools
+                                    has_linting_errors = @previous_errors.any? do |e|
+                                      e.match?(/flake8|black|pylint|eslint|prettier|No module named|No such file or directory/i)
+                                    end
+
+                                    linting_warning = if has_linting_errors
+                                                        "\n\n⚠️ CRITICAL: Previous attempts failed because linting tools (flake8, black, etc.) are NOT installed.\n" \
+                                                          "DO NOT include any linting steps in your plan. Skip all linting/formatting steps.\n" \
+                                                          "Focus ONLY on creating/modifying the file - linting is optional and tools are not available."
+                                                      else
+                                                        ""
+                                                      end
+
+                                    <<~ERRORS
+
+                                      PREVIOUS ATTEMPTS - ERRORS ENCOUNTERED:
+                                      #{errors_text}#{linting_warning}
+
+                                      IMPORTANT: Learn from these errors. If linting tools failed, DO NOT include linting steps in this plan.
+                                    ERRORS
+                                  else
+                                    ""
+                                  end
+
         <<~PROMPT
           You are a PLANNING ENGINE.
+
+          #{previous_errors_section}
 
           #{workspace_context_note}
 
@@ -333,11 +365,28 @@ module Devagent
           - IMPORTANT: If you are unsure about command options or flags, you can first run the command with --help or -h to discover available options.
           - Example: If you need to know rubocop options, first run: {"step_id": 1, "action": "exec.run", "command": "rubocop --help", "reason": "Discover rubocop options", "depends_on": []}
           - Then use the discovered options in subsequent steps.
-          - For diagnostic/linter commands (rubocop, eslint, etc.) that return non-zero exit codes when issues are found, you MUST set 'accepted_exit_codes: [0, 1]' or 'allow_failure: true'. These commands are successful even if they find issues.
+          - For diagnostic/linter commands (rubocop, flake8, pylint, eslint, etc.) that return non-zero exit codes when issues are found, you MUST set 'accepted_exit_codes: [0, 1]' or 'allow_failure: true'. These commands are successful even if they find issues.
+          - CRITICAL: Linting is OPTIONAL, especially for Python files. If linting tools are not installed or commands fail, DO NOT include linting steps in your plan. The primary goal is file creation/modification, not linting.
+          - IMPORTANT: If you include linting steps, you MUST set 'allow_failure: true' so the plan doesn't fail if the tools aren't available.
+          - Language-specific linters (ONLY include if you're confident the tools are available, and ALWAYS use allow_failure: true):
+            * Ruby files (.rb): Use "bundle exec rubocop" to check, "bundle exec rubocop -a" to auto-fix (rubocop is commonly available in Ruby projects). Set 'allow_failure: true' for linting steps.
+            * Python files (.py): Linting is OPTIONAL. Only include flake8/black steps if you're certain they're installed. Many Python projects don't have these tools. If you include them, use "python3 -m flake8" (ALWAYS use python3, not python) with 'allow_failure: true'. Flake8 does NOT have auto-fix. If issues are found, read the output and use fs.write to fix them manually, or use "python3 -m black" to auto-format.
+            * JavaScript/TypeScript files (.js, .jsx, .ts, .tsx): Use "npx eslint" to check, "npx eslint --fix" to auto-fix. Prefer npx over npm run as it doesn't require package.json scripts. Example: "npx eslint --fix playground/file.js". Set 'allow_failure: true' for linting steps.
+          - IMPORTANT: Only use linters that are appropriate for the file type. Don't run rubocop on Python files or flake8 on Ruby files.
+          - IMPORTANT: For Python commands, ALWAYS use "python3" (not "python") as many systems don't have "python" command. Example: "python3 -m flake8" not "python -m flake8".
+          - RULE: If a previous attempt failed because linting tools weren't available (e.g., "No module named flake8", "No such file or directory"), DO NOT include linting steps in the retry plan. Focus on creating/modifying the file correctly without linting.
+          - For Python files: Linting is nice-to-have but NOT required. It's better to create a working file without linting than to fail because linting tools aren't installed.
+          - Example linting steps with allow_failure:
+            * Python: {"step_id": 2, "action": "exec.run", "command": "python3 -m flake8 playground/file.py", "accepted_exit_codes": [0, 1], "allow_failure": true, "reason": "Check code style (optional)", "depends_on": []}
+            * JavaScript: {"step_id": 2, "action": "exec.run", "command": "npx eslint --fix playground/file.js", "accepted_exit_codes": [0, 1], "allow_failure": true, "reason": "Check and fix code style (optional)", "depends_on": []}
           - CRITICAL RULE: When you run rubocop to check code style, you MUST ALWAYS follow it with a step to auto-fix issues using 'rubocop -a'. Never run rubocop without following up with auto-fix.
           - MANDATORY PATTERN: If your plan includes "exec.run" with "rubocop" (without -a), you MUST also include a subsequent step with "rubocop -a" to fix any issues found.
           - Example: If step 2 runs "bundle exec rubocop file.rb", then step 3 MUST run "bundle exec rubocop -a file.rb", and step 4 should verify with "bundle exec rubocop file.rb" again.
           - The -a flag tells rubocop to automatically correct violations. This is the preferred method - it's faster and more reliable than manual fixes.
+          - IMPORTANT: If rubocop reports documentation offenses (Style/Documentation), you MUST add documentation using fs.write. Rubocop -a cannot auto-fix documentation - it requires manual addition of comments.
+          - Documentation pattern: After rubocop verification, if documentation offenses remain, add a step to fix them:
+            {"step_id": 5, "action": "fs.read", "path": "playground/file.rb", "reason": "Read file to add missing documentation", "depends_on": []},
+            {"step_id": 6, "action": "fs.write", "path": "playground/file.rb", "reason": "Add top-level class documentation and YARD method comments", "depends_on": [5]}
           - Step-by-step pattern:
             * Step 1: Run rubocop to check: {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Check for style issues", "depends_on": []}
             * Step 2: Run rubocop -a to auto-fix: {"step_id": 3, "action": "exec.run", "command": "bundle exec rubocop -a playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Auto-fix rubocop violations", "depends_on": []}

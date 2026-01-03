@@ -56,6 +56,21 @@ auto:
     - "rspec"
     - "make"
     - "mkdir"
+    - "python"
+    - "python3"
+    - "pip"
+    - "pip3"
+    - "flake8"
+    - "pylint"
+    - "black"
+    - "mypy"
+    - "pytest"
+    - "node"
+    - "npm"
+    - "npx"
+    - "yarn"
+    - "eslint"
+    - "prettier"
   # Allowlist: allow all files by default (denylist will block specific paths)
   # Use "**/*" to allow everything, or specify specific patterns for restrictive access
   allowlist:
