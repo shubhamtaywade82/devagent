@@ -256,7 +256,8 @@ module Devagent
         # Key rules - CRITICAL section for rules that cause plan rejection
         parts << "CRITICAL RULES (violations = plan rejection):"
         parts << "1. fs.write MUST depends_on the step_id of fs.read for SAME path"
-        parts << "2. fs.create for new files only (with complete content)"
+        parts << "   Example: step 1 fs.read 'foo.rb' → step 2 fs.write 'foo.rb' depends_on: [1]"
+        parts << "2. fs.create for new files only (include complete 'content' field)"
         parts << "3. Never fs.write after fs.create for same file"
         parts << ""
         parts << "Linter tips: accepted_exit_codes: [0, 1], then 'rubocop -a' to auto-fix"
