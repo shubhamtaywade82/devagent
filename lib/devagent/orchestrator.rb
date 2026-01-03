@@ -1,6 +1,13 @@
 # frozen_string_literal: true
 
 require_relative "planner"
+require_relative "planning/planner"
+require_relative "planning/plan"
+require_relative "planning_failed"
+require_relative "execution/executor"
+require_relative "learning_log"
+require_relative "repo_hasher"
+require_relative "git_diff"
 require_relative "prompts"
 require_relative "streamer"
 require_relative "ui"
@@ -20,7 +27,9 @@ module Devagent
       @context = context
       @ui = ui || UI::Toolkit.new(output: output)
       @streamer = Streamer.new(context, output: output, ui: @ui)
-      @planner = Planner.new(context, streamer: @streamer)
+      @planner = Planner.new(context, streamer: @streamer) # Keep old planner as fallback for now
+      @new_planner = Planning::Planner.new(repo_path: context.repo_path, context: context)
+      @executor = Execution::Executor.new(repo_path: context.repo_path, context: context)
     end
 
     def run(task)
@@ -109,125 +118,38 @@ module Devagent
             visible_tools = Array(visible_tools).reject { |t| t.respond_to?(:category) && t.category.to_s == "git" }
           end
 
-          plan = with_spinner("Planning") do
-            planner.plan(task, controller_feedback: controller_feedback(state), visible_tools: visible_tools)
-          end
-
-          state.plan = plan
-          context.tracer.event("plan", plan_id: plan.plan_id, goal: plan.goal, confidence: plan.confidence,
-                                       steps: plan.steps)
-          streamer.say("Plan: #{plan.goal} (#{(plan.confidence * 100).round}%)") if plan.goal && !quiet?
-
-          # Check if we should use fallback for command-checking questions with low confidence
-          if question_requires_command?(task) && plan.confidence.to_f < 0.3
-            unless quiet?
-              streamer.say("Planning generated low confidence. Using fallback plan for command execution...",
-                           level: :warn)
-            end
-            minimal_plan = create_minimal_command_plan(task)
-            if minimal_plan
-              state.plan = minimal_plan
-              state.phase = :execution
-              next
-            end
-          end
-
-          # Check if we should fallback for EXPLANATION questions that need file access
-          # If planning fails, fall back to indexing + direct answer (simpler approach)
-          # But only if the plan actually failed to parse (indicated by empty plan_id or invalid assumptions)
-          plan_failed_to_parse = plan.plan_id.to_s.empty? ||
-                                 plan.assumptions.include?("invalid plan JSON/schema")
-
-          if question_needs_file_access?(task) && %w[EXPLANATION GENERAL].include?(state.intent)
-            # Only trigger fallback if plan actually failed to parse, not just low confidence
-            if plan_failed_to_parse
-              unless quiet?
-                streamer.say("Planning failed to parse. Falling back to indexing for explanation...",
-                             level: :warn)
-              end
-              use_repo_context = question_about_repo?(task)
-              return answer_unactionable(task, state.intent_confidence, use_repo_context: use_repo_context)
-            elsif plan.confidence.to_f < 0.3 && plan.steps.empty?
-              # Only fallback if both low confidence AND no steps (not just low confidence)
-              unless quiet?
-                streamer.say("Planning generated low confidence for explanation question. Falling back to indexing...",
-                             level: :warn)
-              end
-              use_repo_context = question_about_repo?(task)
-              return answer_unactionable(task, state.intent_confidence, use_repo_context: use_repo_context)
-            end
-          end
-
-          # Check if we should use fallback for CODE_EDIT tasks with low confidence
-          # Do this BEFORE validation to avoid unnecessary validation errors
-          if state.intent == "CODE_EDIT" && (plan.confidence.to_f < 0.3 || plan.steps.empty?)
-            unless quiet?
-              streamer.say("Planning generated low confidence for code edit. Attempting to create minimal plan...",
-                           level: :warn)
-            end
-            # Check if this is a file creation request
-            is_create_request = task.to_s.downcase.match?(/\b(create|new|add)\s+(?:a\s+)?(?:new\s+)?file\b/i)
-            minimal_plan = if is_create_request
-                             create_minimal_create_plan(task)
-                           else
-                             create_minimal_edit_plan(task)
-                           end
-            if minimal_plan
-              state.plan = minimal_plan
-              state.phase = :execution
-              next
-            else
-              # If minimal plan creation failed, provide helpful error message
-              if is_create_request
-                # Try to extract the path to give a specific error
-                file_path_match = task.to_s.match(/\b(?:create|new|add)\s+(?:a\s+)?(?:new\s+)?file\s+([a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
-                file_path = file_path_match ? file_path_match[1] : nil
-                unless file_path
-                  any_match = task.to_s.match(/\b([a-zA-Z0-9_\-\.\/]+\/(?:[a-zA-Z0-9_\-\.\/]+\/)*[a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
-                  file_path = any_match[1] if any_match
-                end
-                if file_path && !context.tool_bus.safety.allowed?(file_path)
-                  unless quiet?
-                    streamer.say("Cannot create file: '#{file_path}' is in the denylist or not in the allowlist.", level: :warn)
-                    streamer.say("Please use an allowed path (e.g., 'lib/hello.rb' instead of 'tmp/hello.rb').", level: :info)
-                  end
-                  return
-                end
-              end
-            end
-          end
-
+          # Use new Planning::Planner with hard contract
           begin
-            validate_plan!(state, plan, visible_tools: visible_tools)
-          rescue StandardError => e
-            streamer.say("PLAN_REJECTED: #{e.message}", level: :warn) unless quiet?
-            # If validation fails for a command-checking question, try fallback
-            if question_requires_command?(task)
-              streamer.say("Plan validation failed. Trying fallback plan...", level: :warn) unless quiet?
-              minimal_plan = create_minimal_command_plan(task)
-              if minimal_plan
-                state.plan = minimal_plan
-                state.phase = :execution
-                next
-              end
+            new_plan = with_spinner("Planning") do
+              @new_planner.call(task)
             end
-            # If validation fails for an EXPLANATION question that needs file access, fall back to indexing
-            if question_needs_file_access?(task) && %w[EXPLANATION GENERAL].include?(state.intent)
-              streamer.say("Plan validation failed. Falling back to indexing for explanation...", level: :warn) unless quiet?
-              use_repo_context = question_about_repo?(task)
-              return answer_unactionable(task, state.intent_confidence, use_repo_context: use_repo_context)
-            end
-            # If validation fails for other reasons (not confidence), we've already tried minimal plan above
-            state.record_error(signature: "plan_rejected", message: e.message)
-            state.record_observation({ "type" => "PLAN_REJECTED", "message" => e.message })
-            state.phase = :decision
-            next
-          end
 
-          if plan.steps.empty?
-            state.phase = :done
-            answer_unactionable(task, plan.confidence)
-            next
+            # Convert Planning::Plan to old Plan struct for compatibility
+            plan = convert_plan_to_legacy(new_plan)
+
+            state.plan = plan
+            context.tracer.event("plan", plan_id: plan.plan_id, goal: plan.goal, confidence: plan.confidence,
+                                         steps: plan.steps)
+            streamer.say("Plan: #{plan.goal} (#{new_plan.confidence}%)") if plan.goal && !quiet?
+
+            # Validate plan (hard contract - no fallbacks)
+            begin
+              validate_plan!(state, plan, visible_tools: visible_tools)
+            rescue StandardError => e
+              streamer.say("PLAN_REJECTED: #{e.message}", level: :error) unless quiet?
+              state.record_error(signature: "plan_rejected", message: e.message)
+              state.record_observation({ "type" => "PLAN_REJECTED", "message" => e.message })
+              raise PlanningFailed, "Plan validation failed: #{e.message}"
+            end
+
+            if plan.steps.empty?
+              raise PlanningFailed, "Plan has no steps"
+            end
+          rescue PlanningFailed => e
+            streamer.say("Planning failed: #{e.message}", level: :error) unless quiet?
+            state.record_error(signature: "planning_failed", message: e.message)
+            state.phase = :halted
+            break
           end
 
           state.phase = :execution
@@ -259,6 +181,8 @@ module Devagent
         when :done
           # Generate answer based on observations and command output
           generate_answer(task, state)
+          # Log successful execution for future LoRA training
+          log_successful_execution(task, state)
           break
         else
           state.phase = :halted
@@ -267,6 +191,31 @@ module Devagent
     end
 
     private
+
+    def convert_plan_to_legacy(new_plan)
+      # Convert Planning::Plan (confidence 0-100) to old Plan struct (confidence 0-1)
+      # Also convert steps format if needed
+      steps = new_plan.steps.map do |step|
+        if step.is_a?(Hash)
+          step
+        else
+          # If step is a string or other format, convert to hash
+          { "step_id" => 1, "action" => step.to_s, "reason" => step.to_s, "depends_on" => [] }
+        end
+      end
+
+      Plan.new(
+        plan_id: new_plan.plan_id,
+        goal: new_plan.goal,
+        assumptions: new_plan.assumptions,
+        steps: steps,
+        success_criteria: new_plan.success_criteria,
+        rollback_strategy: new_plan.rollback_strategy,
+        confidence: new_plan.confidence / 100.0, # Convert 0-100 to 0-1
+        actions: [], # Legacy field, no longer used
+        summary: new_plan.goal
+      )
+    end
 
     def execute_plan(state)
       plan = state.plan
@@ -1445,6 +1394,25 @@ module Devagent
         @@ -0,0 +1,#{hunk_count} @@
         #{hunk_lines}
       DIFF
+    end
+
+    def log_successful_execution(task, state)
+      # Only log if execution completed successfully (no errors, not halted)
+      return if state.errors.any?
+      return unless state.plan
+      return if state.phase == :halted
+
+      # Log successful execution (non-blocking, fail silently)
+      LearningLog.append(
+        instruction: task.to_s,
+        repo_hash: RepoHasher.current(context.repo_path),
+        plan_steps: state.plan.steps,
+        diff: GitDiff.current(context.repo_path),
+        accepted: true
+      )
+    rescue StandardError
+      # Logging must NEVER break execution - fail silently
+      nil
     end
   end
 end
