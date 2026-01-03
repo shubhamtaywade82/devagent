@@ -8,6 +8,9 @@ require_relative "execution/executor"
 require_relative "learning_log"
 require_relative "repo_hasher"
 require_relative "git_diff"
+require_relative "goal"
+require_relative "validation/goal_validator"
+require_relative "validation/stagnation_detector"
 require_relative "prompts"
 require_relative "streamer"
 require_relative "ui"
@@ -20,7 +23,23 @@ require "shellwords"
 
 module Devagent
   # Orchestrator coordinates planning, execution, and testing loops.
+  #
+  # GOAL-DRIVEN RETRY LOOP:
+  # Agents don't "finish steps" - they try to reach a GOAL by iterating
+  # until success or a hard stop. The control flow is:
+  #
+  #   GOAL → PLAN → EXECUTE → VALIDATE → GOAL MET? → YES → STOP
+  #                                          ↓
+  #                                         NO
+  #                                          ↓
+  #                                    REPLAN (with updated repo state)
+  #
+  # This is ReAct done correctly (without hallucinations).
+  #
   class Orchestrator
+    # Maximum number of goal-driven retry attempts
+    MAX_GOAL_ATTEMPTS = 5
+
     attr_reader :context, :planner, :streamer, :ui
 
     def initialize(context, output: $stdout, ui: nil)
@@ -30,11 +49,18 @@ module Devagent
       @planner = Planner.new(context, streamer: @streamer) # Keep old planner as fallback for now
       @new_planner = Planning::Planner.new(repo_path: context.repo_path, context: context)
       @executor = Execution::Executor.new(repo_path: context.repo_path, context: context)
+      @stagnation_detector = Validation::StagnationDetector.new
     end
 
     def run(task)
       context.session_memory.append("user", task)
-      state = AgentState.initial(goal: task)
+
+      # Create a Goal object - the agent tries to satisfy this goal, not "finish steps"
+      goal = Goal.new(task)
+      state = AgentState.initial(goal: goal.description)
+
+      # Reset stagnation detector for new goal
+      @stagnation_detector.reset!
 
       # Security: Handle "list all files" requests BEFORE intent classification
       # This prevents misclassified intents from bypassing the security check
@@ -101,9 +127,82 @@ module Devagent
 
       with_spinner("Indexing") { context.index.build! }
 
+      # GOAL-DRIVEN RETRY LOOP
+      # The agent tries to reach the GOAL by iterating until:
+      # 1. Goal is satisfied (SUCCESS)
+      # 2. Max attempts reached (HARD STOP)
+      # 3. Stagnation detected (HARD STOP)
+      # 4. Clarification needed (PAUSE)
+      goal_attempt = 0
+      max_goal_attempts = context.config.dig("auto", "max_goal_attempts") || MAX_GOAL_ATTEMPTS
       max_cycles = context.config.dig("auto", "max_iterations") || 3
-      state.phase = :planning
 
+      while goal_attempt < max_goal_attempts
+        goal_attempt += 1
+        context.tracer.event("goal_attempt", attempt: goal_attempt, max: max_goal_attempts)
+        streamer.say("Goal attempt #{goal_attempt}/#{max_goal_attempts}") unless quiet?
+
+        # Reset state for new attempt (keep goal, intent, but clear execution artifacts)
+        if goal_attempt > 1
+          state = reset_state_for_retry(state, goal)
+        end
+
+        state.phase = :planning
+
+        # Single attempt inner loop (plan → execute → observe → decide)
+        begin
+          run_single_attempt(state, task, goal, max_cycles: max_cycles)
+        rescue PlanningFailed => e
+          streamer.say("Planning failed: #{e.message}", level: :error) unless quiet?
+          context.tracer.event("goal_attempt_failed", attempt: goal_attempt, reason: e.message)
+          # Continue to next goal attempt
+          next
+        end
+
+        # GOAL VALIDATION: Check if goal is satisfied
+        validation = Validation::GoalValidator.satisfied?(goal, state: state, repo_path: context.repo_path)
+        context.tracer.event("goal_validation", satisfied: validation[:satisfied], reason: validation[:reason])
+
+        if validation[:satisfied]
+          streamer.say("✔ Goal satisfied after #{goal_attempt} attempt(s): #{validation[:reason]}", level: :success) unless quiet?
+          log_successful_execution(task, state)
+          return
+        end
+
+        # STAGNATION DETECTION: Check if we're making progress
+        current_diff = GitDiff.current(context.repo_path)
+        plan_fp = state.plan ? fingerprint_plan(state.plan) : nil
+        @stagnation_detector.record_state(diff: current_diff, plan_fingerprint: plan_fp, observations: state.observations)
+        stagnation = @stagnation_detector.stagnant?
+
+        if stagnation[:stagnant]
+          streamer.say("Halting: #{stagnation[:reason]} - no progress being made", level: :warn) unless quiet?
+          context.tracer.event("goal_stagnation", reason: stagnation[:reason])
+          break
+        end
+
+        # EARLY STOP CONDITIONS
+        if should_stop_early?(state)
+          context.tracer.event("goal_early_stop", reason: "early stop condition met")
+          break
+        end
+
+        # Not satisfied, not stagnant - will try again with updated repo state
+        streamer.say("Goal not yet satisfied (#{validation[:reason]}), replanning...", level: :info) unless quiet?
+      end
+
+      # Exhausted attempts or stopped early
+      if goal_attempt >= max_goal_attempts
+        streamer.say("✖ Max goal attempts (#{max_goal_attempts}) reached without satisfying goal", level: :warn) unless quiet?
+      end
+
+      # Generate final answer if we have observations
+      generate_answer(task, state) if state.observations.any?
+    end
+
+    # Run a single attempt at the goal (plan → execute → observe → decide)
+    # This is the inner loop that was previously the main loop
+    def run_single_attempt(state, task, goal, max_cycles:)
       until %i[done halted].include?(state.phase)
         case state.phase
         when :planning
@@ -194,10 +293,8 @@ module Devagent
 
           decision_next_phase(state, task, max_cycles: max_cycles)
         when :done
-          # Generate answer based on observations and command output
-          generate_answer(task, state)
-          # Log successful execution for future LoRA training
-          log_successful_execution(task, state)
+          # Attempt completed successfully - the goal-driven loop will handle logging
+          # and determine if the goal is truly satisfied
           break
         else
           state.phase = :halted
@@ -206,6 +303,43 @@ module Devagent
     end
 
     private
+
+    # Reset state for a retry attempt, keeping goal/intent but clearing execution artifacts
+    def reset_state_for_retry(state, goal)
+      new_state = AgentState.initial(goal: goal.description)
+      new_state.intent = state.intent
+      new_state.intent_confidence = state.intent_confidence
+      new_state.retrieved_files = state.retrieved_files
+      new_state.retrieval_cached = true
+      # Keep plan fingerprints to detect repeated plans
+      new_state.plan_fingerprints = state.plan_fingerprints
+      new_state
+    end
+
+    # Check if we should stop early (before exhausting all attempts)
+    # The agent must stop if:
+    # - Planner confidence < threshold
+    # - Executor asks clarification
+    # - No diff produced after execution
+    # - Same diff repeated twice (handled by stagnation detector)
+    # - Max attempts reached (handled by outer loop)
+    def should_stop_early?(state)
+      # Stop if clarification is needed
+      return true if state.clarification_asked
+
+      # Stop if plan confidence was too low (and recorded as error)
+      low_confidence_errors = state.errors.count { |e| e["signature"]&.include?("confidence") }
+      return true if low_confidence_errors >= 2
+
+      # Stop if repeated planning failures
+      planning_errors = state.errors.count { |e| e["signature"]&.include?("planning") }
+      return true if planning_errors >= 2
+
+      # Stop if too many tool rejections
+      return true if state.tool_rejections >= 3
+
+      false
+    end
 
     def convert_plan_to_legacy(new_plan)
       # Convert Planning::Plan (confidence 0-100) to old Plan struct (confidence 0-1)
@@ -775,14 +909,14 @@ module Devagent
     end
 
     def decision_next_phase(state, task, max_cycles:)
-      # Special handling for command-checking questions: if we have command output, proceed to answer
+      # Special handling for command-checking questions: if we have command output,
+      # mark as done so the goal loop can validate and generate answer
       if question_requires_command?(task)
         command_observations = state.observations.select { |o| o["type"] == "COMMAND_EXECUTED" }
         if command_observations.any?
-          # We have command output, generate answer directly
+          # We have command output, mark as done for goal validation
           state.confidence = 0.8
-          generate_answer(task, state)
-          state.phase = :halted # Set to halted to exit the loop
+          state.phase = :done
           return
         end
       end
