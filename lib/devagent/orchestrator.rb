@@ -893,6 +893,9 @@ module Devagent
       # If fs.create targets an existing file, automatically convert it to fs.write with fs.read
       creates = {}
       steps_to_transform = []
+      
+      # Check if we're in devagent gem context
+      is_devagent_gem = devagent_gem?
 
       plan.steps.each_with_index do |s, idx|
         next unless %w[fs.create fs_create].include?(s["action"].to_s)
@@ -902,6 +905,13 @@ module Devagent
 
         # Normalize path for comparison (remove ./ prefix, handle leading /)
         normalized_path = normalize_path_for_validation(path)
+        
+        # Enforce: In devagent gem, new files MUST use playground/, not lib/
+        if is_devagent_gem && !File.exist?(File.join(context.repo_path.to_s, normalized_path))
+          if normalized_path.start_with?("lib/") && !normalized_path.start_with?("lib/devagent/")
+            raise Error, "In devagent gem, new files must use playground/ directory, not lib/. Use 'playground/#{normalized_path.sub(/\Alib\//, "")}' instead of '#{normalized_path}'"
+          end
+        end
 
         full = File.join(context.repo_path.to_s, normalized_path)
         if File.exist?(full)
@@ -1034,6 +1044,14 @@ module Devagent
       fp = fingerprint_plan(plan)
       raise Error, "plan repeated without progress" if state.plan_fingerprints.include?(fp)
       state.plan_fingerprints << fp
+    end
+
+    def devagent_gem?
+      gem_path = File.expand_path(context.repo_path)
+      # Check for devagent-specific files/directories
+      File.exist?(File.join(gem_path, "lib/devagent")) &&
+        File.exist?(File.join(gem_path, ".devagent.yml")) &&
+        File.exist?(File.join(gem_path, "exe/devagent"))
     end
 
     def normalize_path_for_validation(path)

@@ -285,6 +285,8 @@ module Devagent
         <<~PROMPT
           You are a PLANNING ENGINE.
 
+          #{workspace_context_note}
+
           You MUST return JSON only with:
           - confidence (0–100 integer)
           - steps (array of step objects, each with: step_id, action, path/command/content as needed, reason, depends_on)
@@ -297,14 +299,22 @@ module Devagent
           - Each step must have: step_id (integer >= 1), action (string), reason (string), depends_on (array of integers)
           - Actions: fs.read, fs.write, fs.create, fs.delete, exec.run
 
-          #{workspace_context_note}
-
           Filesystem semantics (CRITICAL):
           - fs.read: ONLY for files that ALREADY EXIST. Never use fs.read on files that don't exist.
           - fs.create: ONLY for creating NEW files that don't exist yet.
             * MUST include 'content' field with the COMPLETE file content (the entire file, not partial).
             * The content field must contain the full, final version of the file with all features implemented.
-            * #{is_devagent_gem ? 'CRITICAL: When in devagent gem, use playground/ directory for new files (e.g., "playground/calculator.rb" NOT "lib/calculator.rb")' : "Use appropriate project directory (lib/, src/, app/, etc.) for new files"}
+            #{if is_devagent_gem
+                <<~CRITICAL
+                  * ⚠️ CRITICAL WORKSPACE RULE: You are in the devagent gem. For ALL new files, you MUST use playground/ directory.
+                  * ⚠️ WRONG: "lib/calculator.rb" - this will be REJECTED
+                  * ✅ CORRECT: "playground/calculator.rb" - this is REQUIRED
+                  * ⚠️ The lib/ directory is ONLY for devagent gem codebase files, NOT for user-requested files.
+                  * ⚠️ If you use lib/ for a new file, your plan will be REJECTED.
+                CRITICAL
+              else
+                "* Use appropriate project directory (lib/, src/, app/, etc.) for new files"
+              end}
             * NEVER use fs.write after fs.create for the same file - fs.create already includes all the content.
             * NEVER use both fs.create and fs.write for the same file path - this will be rejected.
             * Example: {"step_id": 1, "action": "fs.create", "path": "#{is_devagent_gem ? "playground" : "lib"}/calculator.rb", "content": "# frozen_string_literal: true\n\nclass Calculator\n  # complete class implementation here\nend", "reason": "Create calculator class", "depends_on": []}
