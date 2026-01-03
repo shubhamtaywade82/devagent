@@ -298,13 +298,22 @@ module Devagent
         normalized_path = normalize_path_for_validation(path.to_s)
         ensure_read_same_path!(state, normalized_path)
         original = context.tool_bus.read_file("path" => normalized_path).fetch("content")
-        diff = DiffGenerator.new(context).generate(
-          path: normalized_path,
-          original: original,
-          goal: plan.goal.to_s,
-          reason: step["reason"].to_s,
-          file_exists: true
-        )
+        
+        # If content field is present (from converted fs.create), generate replacement diff
+        # Otherwise, use DiffGenerator to generate diff based on goal/reason
+        if content && !content.to_s.empty?
+          # Generate a replacement diff (replace entire file content)
+          diff = build_replace_file_diff(path: normalized_path, original: original, new_content: content.to_s)
+        else
+          # Use DiffGenerator for LLM-based diff generation
+          diff = DiffGenerator.new(context).generate(
+            path: normalized_path,
+            original: original,
+            goal: plan.goal.to_s,
+            reason: step["reason"].to_s,
+            file_exists: true
+          )
+        end
         tool_invoke_with_policy(state, "fs.write_diff", "path" => normalized_path, "diff" => diff)
       when "fs.delete", "fs_delete"
         raise Error, "path required" if path.to_s.empty?
@@ -820,13 +829,82 @@ module Devagent
         raise Error, "exec.run step #{s['step_id']} requires a 'command' field" if cmd.empty?
       end
 
+      # Enforce: fs.create must only target non-existent files, and should not require dependencies.
+      # If fs.create targets an existing file, automatically convert it to fs.write with fs.read
+      creates = {}
+      steps_to_transform = []
+
+      plan.steps.each_with_index do |s, idx|
+        next unless %w[fs.create fs_create].include?(s["action"].to_s)
+
+        path = s["path"].to_s
+        raise Error, "fs.create path required" if path.empty?
+
+        # Normalize path for comparison (remove ./ prefix, handle leading /)
+        normalized_path = normalize_path_for_validation(path)
+
+        full = File.join(context.repo_path.to_s, normalized_path)
+        if File.exist?(full)
+          # File exists - mark for transformation to fs.read + fs.write
+          steps_to_transform << { index: idx, step: s, normalized_path: normalized_path }
+        else
+          # Store normalized path for conflict checking
+          creates[s["step_id"]] = normalized_path
+        end
+      end
+
+      # Apply transformations (in reverse order to preserve indices)
+      steps_to_transform.reverse_each do |transform|
+        idx = transform[:index]
+        s = transform[:step]
+        normalized_path = transform[:normalized_path]
+
+        # File exists - convert fs.create to fs.read + fs.write
+        # This provides a graceful fallback when user says "create" but file exists
+        unless quiet?
+          streamer.say("Note: File #{normalized_path} already exists. Converting 'create' to 'modify' operation.", level: :info)
+        end
+
+        # Find the highest step_id to insert new steps
+        max_step_id = plan.steps.map { |step| step["step_id"].to_i }.max || 0
+        read_step_id = max_step_id + 1
+        write_step_id = max_step_id + 2
+
+        # Create fs.read step
+        read_step = {
+          "step_id" => read_step_id.to_i,
+          "action" => "fs.read",
+          "path" => normalized_path,
+          "reason" => "Read existing file to prepare for modification",
+          "depends_on" => []
+        }
+
+        # Convert fs.create to fs.write
+        # Preserve the content field so we can generate a replacement diff
+        write_step = {
+          "step_id" => write_step_id.to_i,
+          "action" => "fs.write",
+          "path" => normalized_path,
+          "reason" => s["reason"] || "Update file with new content",
+          "depends_on" => [read_step_id.to_i],
+          "content" => s["content"] # Preserve content for replacement diff generation
+        }
+
+        # Replace the fs.create step with fs.read, then add fs.write after it
+        plan.steps[idx] = read_step
+        plan.steps.insert(idx + 1, write_step)
+      end
+
       # Enforce: every fs.write depends on a prior fs.read of the same path.
+      # Build reads hash AFTER transformations (so transformed steps are included)
       reads = {}
       plan.steps.each do |s|
         if %w[fs.read fs_read].include?(s["action"].to_s)
           path = s["path"].to_s
           normalized_path = normalize_path_for_validation(path)
-          reads[s["step_id"]] = normalized_path
+          # Use integer step_id as key to match depends_on values
+          step_id = s["step_id"].to_i
+          reads[step_id] = normalized_path
         end
       end
 
@@ -844,27 +922,6 @@ module Devagent
 
         state.record_observation({ "type" => "FILE_MISSING", "path" => normalized_path })
         raise Error, "fs.read on non-existent file (use fs.create for new files): #{normalized_path}"
-      end
-
-      # Enforce: fs.create must only target non-existent files, and should not require dependencies.
-      creates = {}
-      plan.steps.each do |s|
-        next unless %w[fs.create fs_create].include?(s["action"].to_s)
-
-        path = s["path"].to_s
-        raise Error, "fs.create path required" if path.empty?
-
-        # Normalize path for comparison (remove ./ prefix, handle leading /)
-        normalized_path = normalize_path_for_validation(path)
-
-        full = File.join(context.repo_path.to_s, normalized_path)
-        if File.exist?(full)
-          raise Error, "fs.create target already exists: #{normalized_path}. To modify an existing file, use 'modify' or 'update' instead of 'create', or delete the file first."
-        end
-
-        # Store normalized path for conflict checking
-
-        creates[s["step_id"]] = normalized_path
       end
 
       # Enforce: fs.write validation (file must exist, no conflict with fs.create, must depend on fs.read)
@@ -1468,6 +1525,55 @@ module Devagent
         +++ b/#{path}
         @@ -0,0 +1,#{hunk_count} @@
         #{hunk_lines}
+      DIFF
+    end
+
+    # Build a unified diff for replacing entire file content.
+    #
+    # This is controller-owned and deterministic; it avoids relying on model-produced diff formatting.
+    # Uses Diffy library (already used in tool_bus) to generate proper unified diff format.
+    def build_replace_file_diff(path:, original:, new_content:)
+      raise Error, "new_content required" if new_content.to_s.empty?
+
+      # If content is identical, return a minimal no-op diff
+      # tool_bus.write_diff will detect and handle no-op diffs correctly
+      if original.to_s == new_content.to_s
+        original_lines = original.to_s.lines
+        hunk_count = original_lines.size
+        hunk_lines = original_lines.map { |line| " #{line}" }.join
+        return <<~DIFF
+          --- a/#{path}
+          +++ b/#{path}
+          @@ -1,#{hunk_count} +1,#{hunk_count} @@
+          #{hunk_lines}
+        DIFF
+      end
+
+      # Use Diffy to generate diff lines (without headers)
+      require "diffy"
+      diff_text = Diffy::Diff.new(original.to_s, new_content.to_s, context: 3).to_s(:text)
+      diff_lines = diff_text.lines
+      
+      # Count lines for hunk header calculation
+      # Count context (unchanged), additions, and deletions
+      context_lines = diff_lines.count { |l| l.start_with?(" ") }
+      additions = diff_lines.count { |l| l.start_with?("+") && !l.start_with?("+++") }
+      deletions = diff_lines.count { |l| l.start_with?("-") && !l.start_with?("---") }
+      
+      # Calculate hunk header: @@ -start,old_count +start,new_count @@
+      # old_count = context + deletions, new_count = context + additions
+      old_count = context_lines + deletions
+      new_count = context_lines + additions
+      start_line = 1
+      
+      # Build proper unified diff with headers and hunk
+      hunk_header = "@@ -#{start_line},#{old_count} +#{start_line},#{new_count} @@\n"
+      diff_body = diff_lines.join
+      
+      <<~DIFF
+        --- a/#{path}
+        +++ b/#{path}
+        #{hunk_header}#{diff_body}
       DIFF
     end
 
