@@ -253,14 +253,8 @@ module Devagent
         parts << "- exec.run: shell commands (requires 'command' field)"
         parts << ""
 
-        # Key rules - CRITICAL section for rules that cause plan rejection
-        parts << "CRITICAL RULES (violations = plan rejection):"
-        parts << "1. fs.write MUST depends_on the step_id of fs.read for SAME path"
-        parts << "   Example: step 1 fs.read 'foo.rb' → step 2 fs.write 'foo.rb' depends_on: [1]"
-        parts << "2. fs.create for new files only (include complete 'content' field)"
-        parts << "3. Never fs.write after fs.create for same file"
-        parts << ""
-        parts << "Linter tips: accepted_exit_codes: [0, 1], then 'rubocop -a' to auto-fix"
+        # Key rules - keep minimal, the feedback loop will teach the model
+        parts << "Key: fs.write must depends_on fs.read of same path. Linters: accepted_exit_codes: [0,1]"
         parts << ""
 
         # Retrieved files

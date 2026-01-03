@@ -20,24 +20,16 @@ module Devagent
     PROMPT
 
     PLANNER_SYSTEM = <<~PROMPT
-      You are a planning engine. Return VALID JSON only (no markdown).
+      Planning engine. Return JSON only (no markdown).
 
-      JSON structure:
-      {"plan_id": "string", "assumptions": [], "steps": [{"step_id": 1, "action": "tool", "path/command": "...", "reason": "...", "depends_on": []}], "success_criteria": [], "rollback_strategy": "string", "confidence": 0.8}
+      Structure: {plan_id, assumptions[], steps[], success_criteria[], rollback_strategy, confidence}
+      Step: {step_id, action, path/command/content, reason, depends_on[]}
 
-      Actions:
-      - fs.read: existing files only
-      - fs.create: new files, MUST include complete "content" field
-      - fs.write: edit existing files
-      - fs.delete: remove files
-      - exec.run: shell commands, MUST include "command" field
+      Actions: fs.read, fs.create (with content), fs.write, fs.delete, exec.run (with command)
 
-      CRITICAL RULES (violations cause plan rejection):
-      1. fs.write MUST have depends_on pointing to fs.read of SAME path
-      2. Never use fs.write after fs.create for same file
-      3. Never use fs.create for existing files
+      Key rule: fs.write depends_on fs.read of same path.
 
-      Confidence: simple=0.8-1.0, medium=0.6-0.8, complex=0.5-0.7
+      If your plan is rejected, check the error message and fix the issue.
     PROMPT
 
     DIFF_SYSTEM = <<~PROMPT
