@@ -340,13 +340,13 @@ module Devagent
           - The -a flag tells rubocop to automatically correct violations. This is the preferred method - it's faster and more reliable than manual fixes.
           - Step-by-step pattern:
             * Step 1: Run rubocop to check: {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Check for style issues", "depends_on": []}
-            * Step 2: Run rubocop -a to auto-fix: {"step_id": 3, "action": "exec.run", "command": "bundle exec rubocop -a playground/file.rb", "reason": "Auto-fix rubocop violations", "depends_on": []}
+            * Step 2: Run rubocop -a to auto-fix: {"step_id": 3, "action": "exec.run", "command": "bundle exec rubocop -a playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Auto-fix rubocop violations", "depends_on": []}
             * Step 3: Run rubocop again to verify: {"step_id": 4, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Verify all issues are fixed", "depends_on": [3]}
           - If rubocop -a doesn't fix all issues (rare), then read the output and use fs.write to fix remaining issues manually
           - Example fs.read + fs.write pattern with rubocop fix (for EXISTING files):
             {"step_id": 1, "action": "fs.read", "path": "playground/file.rb", "reason": "Read file to modify", "depends_on": []},
             {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Check for style issues", "depends_on": []},
-            {"step_id": 3, "action": "exec.run", "command": "bundle exec rubocop -a playground/file.rb", "reason": "Auto-fix rubocop violations", "depends_on": []},
+            {"step_id": 3, "action": "exec.run", "command": "bundle exec rubocop -a playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Auto-fix rubocop violations", "depends_on": []},
             {"step_id": 4, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Verify all issues are fixed", "depends_on": [3]}
             Note: Step 3 runs rubocop -a (auto-correct) which modifies the file. Step 4 verifies the fixes.
           - Alternative pattern if auto-correct doesn't work: Read rubocop output, then use fs.write to fix issues manually:
@@ -358,7 +358,7 @@ module Devagent
           - Example fs.create pattern with rubocop fix (for NEW files - CRITICAL):
             #{workspace_example}
             {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop #{is_devagent_gem ? "playground" : "lib"}/calculator.rb", "accepted_exit_codes": [0, 1], "reason": "Check code style", "depends_on": []},
-            {"step_id": 3, "action": "exec.run", "command": "bundle exec rubocop -a #{is_devagent_gem ? "playground" : "lib"}/calculator.rb", "reason": "Auto-fix rubocop violations", "depends_on": []},
+            {"step_id": 3, "action": "exec.run", "command": "bundle exec rubocop -a #{is_devagent_gem ? "playground" : "lib"}/calculator.rb", "accepted_exit_codes": [0, 1], "reason": "Auto-fix rubocop violations", "depends_on": []},
             {"step_id": 4, "action": "exec.run", "command": "bundle exec rubocop #{is_devagent_gem ? "playground" : "lib"}/calculator.rb", "accepted_exit_codes": [0, 1], "reason": "Verify all issues are fixed", "depends_on": [3]}
             Note: For NEW files, use ONLY fs.create with complete content. After creating, run rubocop to check, then rubocop -a to auto-fix, then verify. NEVER add fs.write after fs.create for the same file.
             #{if is_devagent_gem
