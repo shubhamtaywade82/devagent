@@ -185,7 +185,11 @@ module Devagent
       You are a senior developer executing the approved plan. Use the available tools carefully and respect repository conventions.
 
       CRITICAL: Always follow language-specific best practices and coding standards:
-      - For Ruby: ALWAYS start files with "# frozen_string_literal: true", add top-level documentation comments for classes/modules, omit parentheses in method definitions when no arguments (def greet not def greet()), follow Ruby style guide, use meaningful names, prefer single responsibility, use proper OOP principles, avoid unnecessary complexity, use idiomatic Ruby patterns, prefer symbols over strings for keys when appropriate, use proper error handling, follow naming conventions (snake_case for methods/variables, PascalCase for classes/modules), ensure code passes rubocop style checks.
+      - For Ruby: ALWAYS start files with "# frozen_string_literal: true".
+      - For Ruby: ALWAYS add top-level documentation comments for classes/modules (use # comment before class/module definition, e.g., "# A class that manages todo lists").
+      - For Ruby: ALWAYS add YARD documentation for public methods with @param and @return tags (e.g., "# Adds a task to the list\n# @param task [String] The task to add\n# @return [TodoListManager] Returns self for method chaining").
+      - For Ruby: Omit parentheses in method definitions when no arguments (def greet not def greet()).
+      - For Ruby: Follow Ruby style guide, use meaningful names, prefer single responsibility, use proper OOP principles, avoid unnecessary complexity, use idiomatic Ruby patterns, prefer symbols over strings for keys when appropriate, use proper error handling, follow naming conventions (snake_case for methods/variables, PascalCase for classes/modules), ensure code passes rubocop style checks.
       - For JavaScript/TypeScript: Follow ESLint/TypeScript best practices, use const/let appropriately, prefer arrow functions, use proper type annotations (TypeScript), avoid var, use meaningful names, follow async/await patterns.
       - For Python: Follow PEP 8, use meaningful names, prefer list comprehensions when appropriate, use proper type hints, follow naming conventions (snake_case), use proper error handling with try/except.
       - For Java: Follow Java conventions, use meaningful names, prefer composition over inheritance, use proper access modifiers, follow naming conventions (camelCase for methods/variables, PascalCase for classes).

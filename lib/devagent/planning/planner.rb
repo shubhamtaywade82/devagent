@@ -338,6 +338,10 @@ module Devagent
           - MANDATORY PATTERN: If your plan includes "exec.run" with "rubocop" (without -a), you MUST also include a subsequent step with "rubocop -a" to fix any issues found.
           - Example: If step 2 runs "bundle exec rubocop file.rb", then step 3 MUST run "bundle exec rubocop -a file.rb", and step 4 should verify with "bundle exec rubocop file.rb" again.
           - The -a flag tells rubocop to automatically correct violations. This is the preferred method - it's faster and more reliable than manual fixes.
+          - IMPORTANT: If rubocop reports documentation offenses (Style/Documentation), you MUST add documentation using fs.write. Rubocop -a cannot auto-fix documentation - it requires manual addition of comments.
+          - Documentation pattern: After rubocop verification, if documentation offenses remain, add a step to fix them:
+            {"step_id": 5, "action": "fs.read", "path": "playground/file.rb", "reason": "Read file to add missing documentation", "depends_on": []},
+            {"step_id": 6, "action": "fs.write", "path": "playground/file.rb", "reason": "Add top-level class documentation and YARD method comments", "depends_on": [5]}
           - Step-by-step pattern:
             * Step 1: Run rubocop to check: {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Check for style issues", "depends_on": []}
             * Step 2: Run rubocop -a to auto-fix: {"step_id": 3, "action": "exec.run", "command": "bundle exec rubocop -a playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Auto-fix rubocop violations", "depends_on": []}
