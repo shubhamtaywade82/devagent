@@ -226,155 +226,57 @@ module Devagent
       end
 
       def build_prompt(user_prompt, is_empty, retrieved_files: [])
-        empty_repo_instruction = if is_empty
-                                   "\n\nCRITICAL: Repository is empty. You MUST:\n" \
-                                     "- Set confidence >= 70\n" \
-                                     "- Include 'BOOTSTRAP_REPO' as the first step in steps array\n"
-                                 else
-                                   ""
-                                 end
-
-        # Determine workspace context
         is_devagent_gem = devagent_gem?
-        workspace_context_note = if is_devagent_gem
-                                   <<~WORKSPACE
-                                     WORKSPACE CONTEXT (CRITICAL):
-                                     - You are running INSIDE the devagent gem itself
-                                     - For NEW files, you MUST use playground/ as the workspace directory
-                                     - Example: "playground/calculator.rb" NOT "lib/calculator.rb"
-                                     - The playground/ directory is the designated workspace for testing and examples
-                                     - Only use lib/ for files that are part of the devagent gem codebase itself
-                                   WORKSPACE
-                                 else
-                                   <<~WORKSPACE
-                                     WORKSPACE CONTEXT:
-                                     - You are running in an external project
-                                     - For NEW files, use standard project directories (lib/, src/, app/, etc.)
-                                     - Files are searched in priority order: lib/, src/, app/, spec/, test/, tests/, playground/
-                                   WORKSPACE
-                                 end
+        workspace_dir = is_devagent_gem ? "playground" : "lib"
 
-        workspace_note = if is_devagent_gem
-                           "Workspace: playground/ (devagent gem context). Files are searched in priority order: playground/, lib/, src/, app/, spec/, test/, tests/, and root."
-                         else
-                           "Files are searched in priority order: lib/, src/, app/, spec/, test/, tests/, playground/, and root."
-                         end
+        parts = []
+        parts << "PLANNING ENGINE - Return JSON only, no markdown."
+        parts << ""
 
-        workspace_example = if is_devagent_gem
-                              '{"step_id": 1, "action": "fs.create", "path": "playground/calculator.rb", "content": "# frozen_string_literal: true\n\n# Calculator class using OOP principles\nclass Calculator\n  def initialize\n    @result = 0\n  end\n\n  def add(value)\n    @result += value\n    self\n  end\n\n  def subtract(value)\n    @result -= value\n    self\n  end\n\n  def result\n    @result\n  end\nend", "reason": "Create calculator class with OOP", "depends_on": []},'
-                            else
-                              '{"step_id": 1, "action": "fs.create", "path": "lib/calculator.rb", "content": "# frozen_string_literal: true\n\n# Calculator class using OOP principles\nclass Calculator\n  def initialize\n    @result = 0\n  end\n\n  def add(value)\n    @result += value\n    self\n  end\n\n  def subtract(value)\n    @result -= value\n    self\n  end\n\n  def result\n    @result\n  end\nend", "reason": "Create calculator class with OOP", "depends_on": []},'
-                            end
+        # Workspace context
+        if is_devagent_gem
+          parts << "WORKSPACE: playground/ (devagent gem). New files MUST use playground/, NOT lib/."
+        else
+          parts << "WORKSPACE: Standard project (lib/, src/, app/, etc.)"
+        end
+        parts << ""
 
-        # Build retrieved files constraint if we have results
-        retrieved_constraint = if retrieved_files.any?
-                                 files_list = retrieved_files.map { |f| "  - #{f}" }.join("\n")
-                                 <<~RETRIEVED
+        # JSON structure
+        parts << "JSON: {confidence: 0-100, steps: [{step_id, action, path/command/content, reason, depends_on}], blockers: []}"
+        parts << ""
 
-                                   RETRIEVED FILES (from semantic search and file name matching):
-                                   #{files_list}
+        # Actions reference
+        parts << "Actions:"
+        parts << "- fs.read: existing files only"
+        parts << "- fs.create: new files with complete 'content' field"
+        parts << "- fs.write: edit existing (MUST depends_on fs.read of same path)"
+        parts << "- exec.run: shell commands (requires 'command' field)"
+        parts << ""
 
-                                   CONSTRAINT: When using fs.read, you MUST use files from this list if they match the user's request.
-                                   #{workspace_note}
-                                   These files are semantically relevant to the task or match the filename mentioned by the user.
-                                 RETRIEVED
-                               else
-                                 ""
-                               end
+        # Key rules
+        parts << "Rules:"
+        parts << "- Never fs.write after fs.create for same file"
+        parts << "- Linters (rubocop/eslint): use accepted_exit_codes: [0, 1]"
+        parts << "- After rubocop check, run 'rubocop -a' to auto-fix"
+        parts << "- Command output is captured automatically - no fs.read needed"
+        parts << ""
 
-        <<~PROMPT
-          You are a PLANNING ENGINE.
+        # Retrieved files
+        if retrieved_files.any?
+          parts << "RETRIEVED FILES: #{retrieved_files.join(", ")}"
+          parts << "Use these paths for fs.read when they match the task."
+          parts << ""
+        end
 
-          #{workspace_context_note}
+        # Empty repo
+        if is_empty
+          parts << "EMPTY REPO: Set confidence >= 70, first step = BOOTSTRAP_REPO"
+          parts << ""
+        end
 
-          You MUST return JSON only with:
-          - confidence (0–100 integer)
-          - steps (array of step objects, each with: step_id, action, path/command/content as needed, reason, depends_on)
-          - blockers (array of strings)
+        parts << "Task: #{user_prompt}"
 
-          Rules:
-          - Do NOT write code
-          - Do NOT suggest implementations
-          - Return VALID JSON only - no markdown code blocks, no extra text
-          - Each step must have: step_id (integer >= 1), action (string), reason (string), depends_on (array of integers)
-          - Actions: fs.read, fs.write, fs.create, fs.delete, exec.run
-
-          Filesystem semantics (CRITICAL):
-          - fs.read: ONLY for files that ALREADY EXIST. Never use fs.read on files that don't exist.
-          - fs.create: ONLY for creating NEW files that don't exist yet.
-            * MUST include 'content' field with the COMPLETE file content (the entire file, not partial).
-            * The content field must contain the full, final version of the file with all features implemented.
-            #{if is_devagent_gem
-                <<~CRITICAL
-                  * ⚠️ CRITICAL WORKSPACE RULE: You are in the devagent gem. For ALL new files, you MUST use playground/ directory.
-                  * ⚠️ WRONG: "lib/calculator.rb" - this will be REJECTED
-                  * ✅ CORRECT: "playground/calculator.rb" - this is REQUIRED
-                  * ⚠️ The lib/ directory is ONLY for devagent gem codebase files, NOT for user-requested files.
-                  * ⚠️ If you use lib/ for a new file, your plan will be REJECTED.
-                CRITICAL
-              else
-                "* Use appropriate project directory (lib/, src/, app/, etc.) for new files"
-              end}
-            * NEVER use fs.write after fs.create for the same file - fs.create already includes all the content.
-            * NEVER use both fs.create and fs.write for the same file path - this will be rejected.
-            * Example: {"step_id": 1, "action": "fs.create", "path": "#{is_devagent_gem ? "playground" : "lib"}/calculator.rb", "content": "# frozen_string_literal: true\n\nclass Calculator\n  # complete class implementation here\nend", "reason": "Create calculator class", "depends_on": []}
-          - fs.write: ONLY for editing EXISTING files.
-            * CRITICAL: Every fs.write step MUST have a "depends_on" array that includes the step_id of the fs.read step that reads the SAME file path.
-            * Example: If step 1 is "fs.read" for "playground/file.rb", then step 3 "fs.write" for "playground/file.rb" MUST have "depends_on": [1]
-            * The path in fs.write must match the path in the fs.read step (they will be normalized, so "/playground/file.rb" and "playground/file.rb" are the same)
-            * NEVER use fs.write on a file that doesn't exist yet - use fs.create instead.
-            * NEVER use fs.write after fs.create for the same file - use fs.create with complete content instead.
-          - fs.delete: ONLY for deleting EXISTING files.
-          - CRITICAL RULE: For new files, use ONLY fs.create with a complete 'content' field. NEVER use both fs.create and fs.write for the same file path - this will cause plan rejection.
-
-          Command execution:
-          - exec.run: For running shell commands (tests, linters, etc.).
-          - CRITICAL: exec.run steps MUST include a 'command' field with the full command string (e.g., "bundle exec rubocop", "npm test", "rspec").
-          - IMPORTANT: If you are unsure about command options or flags, you can first run the command with --help or -h to discover available options.
-          - Example: If you need to know rubocop options, first run: {"step_id": 1, "action": "exec.run", "command": "rubocop --help", "reason": "Discover rubocop options", "depends_on": []}
-          - Then use the discovered options in subsequent steps.
-          - For diagnostic/linter commands (rubocop, eslint, etc.) that return non-zero exit codes when issues are found, you MUST set 'accepted_exit_codes: [0, 1]' or 'allow_failure: true'. These commands are successful even if they find issues.
-          - CRITICAL RULE: When you run rubocop to check code style, you MUST ALWAYS follow it with a step to auto-fix issues using 'rubocop -a'. Never run rubocop without following up with auto-fix.
-          - MANDATORY PATTERN: If your plan includes "exec.run" with "rubocop" (without -a), you MUST also include a subsequent step with "rubocop -a" to fix any issues found.
-          - Example: If step 2 runs "bundle exec rubocop file.rb", then step 3 MUST run "bundle exec rubocop -a file.rb", and step 4 should verify with "bundle exec rubocop file.rb" again.
-          - The -a flag tells rubocop to automatically correct violations. This is the preferred method - it's faster and more reliable than manual fixes.
-          - IMPORTANT: If rubocop reports documentation offenses (Style/Documentation), you MUST add documentation using fs.write. Rubocop -a cannot auto-fix documentation - it requires manual addition of comments.
-          - Documentation pattern: After rubocop verification, if documentation offenses remain, add a step to fix them:
-            {"step_id": 5, "action": "fs.read", "path": "playground/file.rb", "reason": "Read file to add missing documentation", "depends_on": []},
-            {"step_id": 6, "action": "fs.write", "path": "playground/file.rb", "reason": "Add top-level class documentation and YARD method comments", "depends_on": [5]}
-          - Step-by-step pattern:
-            * Step 1: Run rubocop to check: {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Check for style issues", "depends_on": []}
-            * Step 2: Run rubocop -a to auto-fix: {"step_id": 3, "action": "exec.run", "command": "bundle exec rubocop -a playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Auto-fix rubocop violations", "depends_on": []}
-            * Step 3: Run rubocop again to verify: {"step_id": 4, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Verify all issues are fixed", "depends_on": [3]}
-          - If rubocop -a doesn't fix all issues (rare), then read the output and use fs.write to fix remaining issues manually
-          - Example fs.read + fs.write pattern with rubocop fix (for EXISTING files):
-            {"step_id": 1, "action": "fs.read", "path": "playground/file.rb", "reason": "Read file to modify", "depends_on": []},
-            {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Check for style issues", "depends_on": []},
-            {"step_id": 3, "action": "exec.run", "command": "bundle exec rubocop -a playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Auto-fix rubocop violations", "depends_on": []},
-            {"step_id": 4, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Verify all issues are fixed", "depends_on": [3]}
-            Note: Step 3 runs rubocop -a (auto-correct) which modifies the file. Step 4 verifies the fixes.
-          - Alternative pattern if auto-correct doesn't work: Read rubocop output, then use fs.write to fix issues manually:
-            {"step_id": 1, "action": "fs.read", "path": "playground/file.rb", "reason": "Read file to modify", "depends_on": []},
-            {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop playground/file.rb", "accepted_exit_codes": [0, 1], "reason": "Check for style issues", "depends_on": []},
-            {"step_id": 3, "action": "fs.write", "path": "playground/file.rb", "reason": "Fix rubocop violations based on output from step 2", "depends_on": [1]}
-            Note: Step 3 MUST have "depends_on": [1] because it writes the same file that step 1 reads.
-
-          - Example fs.create pattern with rubocop fix (for NEW files - CRITICAL):
-            #{workspace_example}
-            {"step_id": 2, "action": "exec.run", "command": "bundle exec rubocop #{is_devagent_gem ? "playground" : "lib"}/calculator.rb", "accepted_exit_codes": [0, 1], "reason": "Check code style", "depends_on": []},
-            {"step_id": 3, "action": "exec.run", "command": "bundle exec rubocop -a #{is_devagent_gem ? "playground" : "lib"}/calculator.rb", "accepted_exit_codes": [0, 1], "reason": "Auto-fix rubocop violations", "depends_on": []},
-            {"step_id": 4, "action": "exec.run", "command": "bundle exec rubocop #{is_devagent_gem ? "playground" : "lib"}/calculator.rb", "accepted_exit_codes": [0, 1], "reason": "Verify all issues are fixed", "depends_on": [3]}
-            Note: For NEW files, use ONLY fs.create with complete content. After creating, run rubocop to check, then rubocop -a to auto-fix, then verify. NEVER add fs.write after fs.create for the same file.
-            #{if is_devagent_gem
-                "IMPORTANT: When working in devagent gem, use playground/ as the workspace directory for new files."
-              end}
-          - IMPORTANT: When the task is to "run [command] and summarize/analyze", you should ONLY use exec.run. The command output will be automatically available - you do NOT need to read any files. Do NOT create fs.read steps for command output files.
-          - NEVER use fs.read to read command output files. Command output is captured automatically when you use exec.run.
-          #{retrieved_constraint}
-          #{empty_repo_instruction}
-          Task:
-          #{user_prompt}
-        PROMPT
+        parts.join("\n")
       end
 
       def parse_plan(response, is_empty, retrieved_files: [])
