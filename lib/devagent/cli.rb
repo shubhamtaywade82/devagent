@@ -106,9 +106,94 @@ module Devagent
       success
     end
 
+    desc "index SUBCOMMAND", "Manage the embedding index"
+    def index(subcommand = "status")
+      ctx = build_context
+
+      case subcommand.downcase
+      when "status"
+        index_status(ctx)
+      when "build"
+        index_build(ctx)
+      when "rebuild"
+        index_rebuild(ctx)
+      when "stale"
+        index_stale(ctx)
+      else
+        say("Unknown subcommand: #{subcommand}. Use: status, build, rebuild, stale", :red)
+      end
+    end
+
     default_task :start
 
     private
+
+    def index_status(ctx)
+      require_relative "retrieval_controller"
+
+      controller = RetrievalController.new(ctx)
+      status = controller.index_status
+
+      say("Embedding Index Status", :green)
+      say("-" * 40)
+      say("  Document count    : #{status[:document_count]}")
+      say("  Repository empty  : #{status[:repo_empty] ? 'Yes' : 'No'}")
+      say("  Embeddings ready  : #{status[:embeddings_ready] ? 'Yes' : 'No'}")
+      say("  Embeddings stale  : #{status[:embeddings_stale] ? 'Yes (rebuild recommended)' : 'No'}")
+      say("")
+      say("Backend:", :cyan)
+      say("  Provider          : #{status[:backend]["provider"]}")
+      say("  Model             : #{status[:backend]["model"]}")
+      say("")
+
+      if status[:metadata].any?
+        say("Metadata:", :cyan)
+        say("  Dimension         : #{status[:metadata]["dim"]}")
+        say("  Indexed at        : #{status[:metadata]["indexed_at"] || 'unknown'}")
+        say("  Stored provider   : #{status[:metadata]["provider"]}")
+        say("  Stored model      : #{status[:metadata]["model"]}")
+      else
+        say("Metadata: (none - index not built)", :yellow)
+      end
+
+      # Check for stale files
+      stale_count = ctx.index.stale_files.size
+      if stale_count > 0
+        say("")
+        say("Stale files: #{stale_count} (run 'devagent index build' to update)", :yellow)
+      end
+    end
+
+    def index_build(ctx)
+      say("Building embedding index (incremental)...", :cyan)
+      stale_before = ctx.index.stale_files.size
+
+      if stale_before == 0 && ctx.index.document_count > 0
+        say("Index is up to date. No changes needed.", :green)
+        return
+      end
+
+      result = ctx.index.build_incremental!
+      say("Indexed #{result.size} chunks from #{stale_before} files.", :green)
+    end
+
+    def index_rebuild(ctx)
+      say("Rebuilding embedding index (full)...", :cyan)
+      ctx.index.store.clear!
+      result = ctx.index.build!
+      say("Indexed #{result.size} chunks.", :green)
+    end
+
+    def index_stale(ctx)
+      stale = ctx.index.stale_files
+      if stale.empty?
+        say("No stale files. Index is up to date.", :green)
+      else
+        say("Stale files (#{stale.size}):", :yellow)
+        stale.first(20).each { |f| say("  - #{f}") }
+        say("  ... and #{stale.size - 20} more") if stale.size > 20
+      end
+    end
 
     def build_context
       Context.build(Dir.pwd, context_overrides)

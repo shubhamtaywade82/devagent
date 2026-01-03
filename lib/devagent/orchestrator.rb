@@ -16,19 +16,25 @@ require_relative "intent_classifier"
 require_relative "diff_generator"
 require_relative "decision_engine"
 require_relative "success_verifier"
+require_relative "retrieval_controller"
 require "shellwords"
 
 module Devagent
   # Orchestrator coordinates planning, execution, and testing loops.
   class Orchestrator
-    attr_reader :context, :planner, :streamer, :ui
+    attr_reader :context, :planner, :streamer, :ui, :retrieval_controller
 
     def initialize(context, output: $stdout, ui: nil)
       @context = context
       @ui = ui || UI::Toolkit.new(output: output)
       @streamer = Streamer.new(context, output: output, ui: @ui)
+      @retrieval_controller = RetrievalController.new(context)
       @planner = Planner.new(context, streamer: @streamer) # Keep old planner as fallback for now
-      @new_planner = Planning::Planner.new(repo_path: context.repo_path, context: context)
+      @new_planner = Planning::Planner.new(
+        repo_path: context.repo_path,
+        context: context,
+        retrieval_controller: @retrieval_controller
+      )
       @executor = Execution::Executor.new(repo_path: context.repo_path, context: context)
     end
 
@@ -118,10 +124,16 @@ module Devagent
             visible_tools = Array(visible_tools).reject { |t| t.respond_to?(:category) && t.category.to_s == "git" }
           end
 
-            # Use new Planning::Planner with hard contract
+          # Check for empty repo before planning
+          if retrieval_controller.repo_empty? && state.cycle == 0
+            context.tracer.event("repo_empty_detected")
+            streamer.say("Repository has no indexed files.", level: :warn) unless quiet?
+          end
+
+          # Use new Planning::Planner with hard contract
           begin
             new_plan = with_spinner("Planning") do
-              @new_planner.call(task)
+              @new_planner.call(task, intent: state.intent)
             end
 
             # Convert Planning::Plan to old Plan struct for compatibility
