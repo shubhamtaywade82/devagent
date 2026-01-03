@@ -893,7 +893,7 @@ module Devagent
       # If fs.create targets an existing file, automatically convert it to fs.write with fs.read
       creates = {}
       steps_to_transform = []
-      
+
       # Check if we're in devagent gem context
       is_devagent_gem = devagent_gem?
 
@@ -905,7 +905,7 @@ module Devagent
 
         # Normalize path for comparison (remove ./ prefix, handle leading /)
         normalized_path = normalize_path_for_validation(path)
-        
+
         # Enforce: In devagent gem, new files MUST use playground/, not lib/
         if is_devagent_gem && !File.exist?(File.join(context.repo_path.to_s, normalized_path))
           if normalized_path.start_with?("lib/") && !normalized_path.start_with?("lib/devagent/")
@@ -945,21 +945,21 @@ module Devagent
 
         # Create fs.read step (use original step_id to preserve dependencies)
         read_step = {
-          "step_id" => original_step_id,
+          "step_id" => original_step_id.to_i,
           "action" => "fs.read",
           "path" => normalized_path,
           "reason" => "Read existing file to prepare for modification",
-          "depends_on" => s["depends_on"] || [] # Preserve original dependencies
+          "depends_on" => Array(s["depends_on"] || []).map(&:to_i) # Preserve original dependencies, ensure integers
         }
 
         # Convert fs.create to fs.write
         # Preserve the content field so we can generate a replacement diff
         write_step = {
-          "step_id" => write_step_id,
+          "step_id" => write_step_id.to_i,
           "action" => "fs.write",
           "path" => normalized_path,
           "reason" => s["reason"] || "Update file with new content",
-          "depends_on" => [original_step_id], # Depend on the read step (which has original step_id)
+          "depends_on" => [original_step_id.to_i], # Depend on the read step (which has original step_id), ensure integer
           "content" => s["content"] # Preserve content for replacement diff generation
         }
 
@@ -969,11 +969,15 @@ module Devagent
 
         # Update any steps that depended on the original step_id to now depend on the write step
         # (since exec.run and other steps that depend on fs.create typically want to wait for the write, not the read)
+        # IMPORTANT: Exclude the write_step itself from this update (it should depend on the read step, not itself)
         plan.steps.each do |other_step|
-          depends_on = Array(other_step["depends_on"])
-          if depends_on.include?(original_step_id)
+          # Skip the write_step we just created - it should depend on the read step, not itself
+          next if other_step["step_id"].to_i == write_step_id.to_i
+
+          depends_on = Array(other_step["depends_on"]).map(&:to_i)
+          if depends_on.include?(original_step_id.to_i)
             # Replace dependency on original step with dependency on write step
-            depends_on = depends_on.map { |dep| dep == original_step_id ? write_step_id : dep }
+            depends_on = depends_on.map { |dep| dep == original_step_id.to_i ? write_step_id.to_i : dep }
             other_step["depends_on"] = depends_on.uniq
           end
         end
@@ -1037,7 +1041,17 @@ module Devagent
 
         deps = Array(s["depends_on"]).map(&:to_i)
         dep_paths = deps.filter_map { |id| reads[id] }
-        raise Error, "fs.write must depend_on prior fs.read of same path (#{normalized_path})" unless dep_paths.include?(normalized_path)
+        unless dep_paths.include?(normalized_path)
+          # Debug: log what we found
+          context.tracer.event("fs_write_dependency_check_failed",
+            write_step_id: s["step_id"],
+            write_path: normalized_path,
+            depends_on: deps,
+            reads_hash: reads,
+            dep_paths: dep_paths
+          ) if context.respond_to?(:tracer)
+          raise Error, "fs.write must depend_on prior fs.read of same path (#{normalized_path}). Write step #{s['step_id']} depends on #{deps.inspect}, but reads hash has: #{reads.inspect}"
+        end
       end
 
       # Only fingerprint AFTER all validation checks pass.
