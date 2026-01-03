@@ -325,10 +325,10 @@ module Devagent
           if e.message.include?("diff apply failed") || e.message.include?("patch")
             # Diff failed to apply - try fallback: generate complete new content and write directly
             context.tracer.event("diff_apply_failed_fallback", path: normalized_path) if context.respond_to?(:tracer)
-            
+
             # Re-read file to get current content
             current_content = context.tool_bus.read_file("path" => normalized_path).fetch("content")
-            
+
             # Fallback: Generate complete new file content instead of trying to apply diff
             # This is more reliable when diff format is problematic
             new_content = generate_complete_file_content(
@@ -337,18 +337,18 @@ module Devagent
               goal: plan.goal.to_s,
               reason: step["reason"].to_s
             )
-            
+
             # Write the complete content directly using tool_bus.write_file (bypassing diff)
             # This is a fallback when diff application fails
             context.tool_bus.write_file("path" => normalized_path, "content" => new_content)
-            
+
             # Record the write in state
             state.record_observation({
               "type" => "FILE_WRITTEN",
               "path" => normalized_path,
               "method" => "direct_write_fallback"
             })
-            
+
             # Return success result (execute_step expects this format)
             return { "success" => true, "artifact" => { "path" => normalized_path, "content" => new_content } }
           else
@@ -925,34 +925,56 @@ module Devagent
           streamer.say("Note: File #{normalized_path} already exists. Converting 'create' to 'modify' operation.", level: :info)
         end
 
-        # Find the highest step_id to insert new steps
-        max_step_id = plan.steps.map { |step| step["step_id"].to_i }.max || 0
-        read_step_id = max_step_id + 1
-        write_step_id = max_step_id + 2
+        # Use the original step_id for the read step to preserve dependencies
+        # This ensures any steps that depend on this step still work
+        original_step_id = s["step_id"].to_i
 
-        # Create fs.read step
+        # Find the highest step_id for the write step
+        max_step_id = plan.steps.map { |step| step["step_id"].to_i }.max || 0
+        write_step_id = max_step_id + 1
+
+        # Create fs.read step (use original step_id to preserve dependencies)
         read_step = {
-          "step_id" => read_step_id.to_i,
+          "step_id" => original_step_id,
           "action" => "fs.read",
           "path" => normalized_path,
           "reason" => "Read existing file to prepare for modification",
-          "depends_on" => []
+          "depends_on" => s["depends_on"] || [] # Preserve original dependencies
         }
 
         # Convert fs.create to fs.write
         # Preserve the content field so we can generate a replacement diff
         write_step = {
-          "step_id" => write_step_id.to_i,
+          "step_id" => write_step_id,
           "action" => "fs.write",
           "path" => normalized_path,
           "reason" => s["reason"] || "Update file with new content",
-          "depends_on" => [read_step_id.to_i],
+          "depends_on" => [original_step_id], # Depend on the read step (which has original step_id)
           "content" => s["content"] # Preserve content for replacement diff generation
         }
 
         # Replace the fs.create step with fs.read, then add fs.write after it
         plan.steps[idx] = read_step
         plan.steps.insert(idx + 1, write_step)
+
+        # Update any steps that depended on the original step_id to now depend on the write step
+        # (since exec.run and other steps that depend on fs.create typically want to wait for the write, not the read)
+        plan.steps.each do |other_step|
+          depends_on = Array(other_step["depends_on"])
+          if depends_on.include?(original_step_id)
+            # Replace dependency on original step with dependency on write step
+            depends_on = depends_on.map { |dep| dep == original_step_id ? write_step_id : dep }
+            other_step["depends_on"] = depends_on.uniq
+          end
+        end
+
+        # Log this transformation
+        context.tracer.event("fs_create_to_read_write",
+          original_step_id: original_step_id,
+          read_step_id: original_step_id,
+          write_step_id: write_step_id,
+          path: normalized_path
+        ) if context.respond_to?(:tracer)
       end
 
       # Enforce: every fs.write depends on a prior fs.read of the same path.
