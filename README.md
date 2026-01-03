@@ -11,6 +11,10 @@ Iteration is strictly bounded by a controller-enforced maximum and halts on repe
 - ✅ Planner → Developer → Tester → Reviewer loop that validates JSON tool calls before execution.
 - ✅ Safe ToolBus with allow/deny path globs, git safeguards, and streaming output from tool executions.
 - ✅ Session memory, trace logging, prompt templates, and plugin hooks for Rails, React, and Ruby gem projects.
+- ✅ **Code quality integration**: Automatically runs rubocop and fixes style violations for Ruby code.
+- ✅ **Workspace detection**: Automatically uses `playground/` when developing devagent gem, standard directories for other projects.
+- ✅ **Language best practices**: Follows Ruby, JavaScript, Python, and other language-specific conventions.
+- ✅ **Smart file handling**: Automatically converts file creation to modification when files already exist.
 
 ## Quickstart
 
@@ -159,6 +163,14 @@ If enabled, Devagent only exposes **read-only** git helpers (e.g., status/diff).
 ## Command execution safety (important)
 
 `exec.run` only accepts **structured commands**: `program` + `args` (no raw shell command strings). This avoids shell parsing and makes allowlisting deterministic. Avoid allowing shell interpreters (e.g., `bash`) unless you fully trust the environment.
+
+## Documentation
+
+- [README.md](README.md) - This file, quick start and overview
+- [USAGE_GUIDE.md](USAGE_GUIDE.md) - Detailed usage instructions and best practices
+- [FEATURES.md](FEATURES.md) - Comprehensive feature documentation
+- [TEST_CASES.md](TEST_CASES.md) - Test cases and examples to verify functionality
+- [docs/](docs/) - Additional technical documentation
 
 ## Tooling & Scripts
 

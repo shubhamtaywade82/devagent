@@ -213,6 +213,20 @@ All file modifications are applied via controller-generated diffs. The language 
 
 `exec.run` uses a structured command form (program + args), not a raw shell string.
 
+### Code Quality Tools
+
+DevAgent automatically integrates with code quality tools:
+
+**Rubocop (Ruby):**
+- Automatically runs `rubocop` to check for style violations
+- Uses `rubocop -a` to auto-fix violations
+- Verifies fixes with a final `rubocop` check
+- Ensures generated code follows Ruby best practices
+
+**Other Linters:**
+- Similar auto-fix support can be added for other languages
+- Configure in your `.devagent.yml` if needed
+
 ---
 
 ## Safety Features
@@ -260,10 +274,42 @@ auto:
 ✅ "write tests for User model"
 ```
 
-### 4. Check Results
+### 4. Workspace Awareness
+
+**When developing devagent gem itself:**
+- New files are automatically created in `playground/` directory
+- This keeps test files and examples separate from the gem codebase
+- Example: `exe/devagent "Create a calculator class"` → creates `playground/calculator.rb`
+
+**When using devagent in your project:**
+- New files go to standard project directories (`lib/`, `src/`, `app/`, etc.)
+- DevAgent detects the project structure automatically
+
+### 5. Code Quality
+
+DevAgent automatically:
+- Follows language-specific best practices (Ruby, JavaScript, Python, etc.)
+- Runs linters (rubocop for Ruby) and auto-fixes violations
+- Ensures generated code passes style checks
+- Adds proper documentation and comments
+
+**For Ruby:**
+- Always includes `# frozen_string_literal: true`
+- Adds YARD documentation
+- Follows Ruby style guide
+- Passes rubocop checks
+
+### 6. File Operations
+
+- **Creating files**: DevAgent uses `fs.create` with complete content
+- **Modifying files**: If a file already exists, DevAgent automatically converts "create" to "modify"
+- **Dependencies**: DevAgent ensures files are read before being written
+
+### 7. Check Results
 DevAgent will, when applicable:
 - Show planned and executed steps
 - Run allowlisted test commands
+- Run linters and fix violations
 - Verify success via observed results
 - Ask for clarification if blocked
 
@@ -335,24 +381,38 @@ In the REPL:
 ## What DevAgent Can Do
 
 ✅ **Code Generation**
-- Create new files
-- Add functions/classes
-- Implement features
+- Create new files with complete, production-ready code
+- Add functions/classes following best practices
+- Implement features with proper error handling
+- Automatically fix code style violations
 
 ✅ **Code Modification**
-- Refactor code
-- Fix bugs
+- Refactor code while maintaining functionality
+- Fix bugs and errors
 - Add features to existing code
+- Improve code quality and readability
+
+✅ **Code Quality**
+- Automatically run linters (rubocop for Ruby)
+- Auto-fix style violations
+- Follow language-specific best practices
+- Ensure code passes style checks
 
 ✅ **Testing**
-- Write tests
+- Write comprehensive tests
 - Run test suites
-- Verify changes
+- Verify changes work correctly
 
 ✅ **Documentation**
-- Explain code
-- Answer questions
-- Provide context
+- Explain code and how it works
+- Answer questions about the codebase
+- Provide context and examples
+- Generate API documentation
+
+✅ **Workspace Management**
+- Automatically detect workspace context
+- Use appropriate directories for new files
+- Handle file creation vs modification intelligently
 
 ---
 
