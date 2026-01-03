@@ -273,36 +273,46 @@ module Devagent
 
       case action
       when "fs.read", "fs_read"
-        tool_invoke_with_policy(state, "fs.read", "path" => path)
+        # Normalize path before using it
+        normalized_path = normalize_path_for_validation(path.to_s)
+        tool_invoke_with_policy(state, "fs.read", "path" => normalized_path)
       when "fs.create"
         raise Error, "path required" if path.to_s.empty?
-        raise Error, "file already exists: #{path}" if File.exist?(File.join(context.repo_path, path.to_s))
+
+        # Normalize path before using it (remove ./ prefix, handle leading /)
+        normalized_path = normalize_path_for_validation(path.to_s)
+        raise Error, "file already exists: #{normalized_path}" if File.exist?(File.join(context.repo_path, normalized_path))
 
         raise Error, "content required" if content.to_s.empty?
 
         # Deterministic add-file diff generation (do not rely on model formatting).
-        diff = build_add_file_diff(path: path.to_s, content: content.to_s)
+        # Use normalized path in diff to avoid git apply errors with ./ paths
+        diff = build_add_file_diff(path: normalized_path, content: content.to_s)
 
-        tool_invoke_with_policy(state, "fs.write_diff", "path" => path.to_s, "diff" => diff)
+        tool_invoke_with_policy(state, "fs.write_diff", "path" => normalized_path, "diff" => diff)
       when "fs.write", "fs_write"
         # diff-first write: read must have happened, then generate diff, then apply diff.
         raise Error, "path required" if path.to_s.empty?
 
-        ensure_read_same_path!(state, path)
-        original = context.tool_bus.read_file("path" => path.to_s).fetch("content")
+        # Normalize path before using it
+        normalized_path = normalize_path_for_validation(path.to_s)
+        ensure_read_same_path!(state, normalized_path)
+        original = context.tool_bus.read_file("path" => normalized_path).fetch("content")
         diff = DiffGenerator.new(context).generate(
-          path: path.to_s,
+          path: normalized_path,
           original: original,
           goal: plan.goal.to_s,
           reason: step["reason"].to_s,
           file_exists: true
         )
-        tool_invoke_with_policy(state, "fs.write_diff", "path" => path.to_s, "diff" => diff)
+        tool_invoke_with_policy(state, "fs.write_diff", "path" => normalized_path, "diff" => diff)
       when "fs.delete", "fs_delete"
         raise Error, "path required" if path.to_s.empty?
 
-        ensure_read_same_path!(state, path)
-        tool_invoke_with_policy(state, "fs.delete", "path" => path.to_s)
+        # Normalize path before using it
+        normalized_path = normalize_path_for_validation(path.to_s)
+        ensure_read_same_path!(state, normalized_path)
+        tool_invoke_with_policy(state, "fs.delete", "path" => normalized_path)
       when "exec.run", "run_command", "run_tests"
         # Back-compat: string commands are parsed into program+args.
         # exec.run itself only accepts structured invocations.
@@ -848,7 +858,9 @@ module Devagent
         normalized_path = normalize_path_for_validation(path)
 
         full = File.join(context.repo_path.to_s, normalized_path)
-        raise Error, "fs.create target already exists: #{normalized_path}" if File.exist?(full)
+        if File.exist?(full)
+          raise Error, "fs.create target already exists: #{normalized_path}. To modify an existing file, use 'modify' or 'update' instead of 'create', or delete the file first."
+        end
 
         # Store normalized path for conflict checking
 

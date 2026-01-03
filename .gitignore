@@ -17,3 +17,4 @@
 # Built gem files
 *.gem
 /pkg/
+/playground

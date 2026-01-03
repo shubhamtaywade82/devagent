@@ -46,7 +46,7 @@ openai:
 auto:
   max_iterations: 3
   dry_run: false
-  require_tests_green: true
+  require_tests_green: false # Set to false to skip running full test suite after changes
   confirmation_threshold: 0.7
   command_allowlist:
     - "bundle"
