@@ -26,10 +26,12 @@ module Devagent
       #
       # @param user_prompt [String] The user's task
       # @param intent [String] The classified intent (optional)
+      # @param previous_errors [Array<String>] Errors from previous attempts (optional)
       # @return [Plan] The generated plan
-      def call(user_prompt, intent: nil)
+      def call(user_prompt, intent: nil, previous_errors: [])
         @user_prompt = user_prompt
         @intent = intent
+        @previous_errors = previous_errors || []
 
         # Check if repo is empty
         is_empty = repo_empty?
@@ -234,11 +236,11 @@ module Devagent
         parts << ""
 
         # Workspace context
-        if is_devagent_gem
-          parts << "WORKSPACE: playground/ (devagent gem). New files MUST use playground/, NOT lib/."
-        else
-          parts << "WORKSPACE: Standard project (lib/, src/, app/, etc.)"
-        end
+        parts << if is_devagent_gem
+                   "WORKSPACE: playground/ (devagent gem). New files MUST use playground/, NOT lib/."
+                 else
+                   "WORKSPACE: Standard project (lib/, src/, app/, etc.)"
+                 end
         parts << ""
 
         # JSON structure

@@ -71,7 +71,9 @@ module Devagent
         # If no path specified (list all files), show clarification but also list allowed directories
         if requested_path.nil?
           unless quiet?
-            streamer.say("Clarification needed: Please specify a path. Listing all files in the repository is not allowed for security reasons.", level: :warn)
+            streamer.say(
+              "Clarification needed: Please specify a path. Listing all files in the repository is not allowed for security reasons.", level: :warn
+            )
             streamer.say("Showing files from allowed directories only:")
           end
           # List files from all allowed directories
@@ -79,7 +81,9 @@ module Devagent
         else
           # Path specified but not allowed
           unless quiet?
-            streamer.say("Access denied: The path '#{requested_path}' is not in the allowlist. Please specify a path that is allowed in your configuration.", level: :warn)
+            streamer.say(
+              "Access denied: The path '#{requested_path}' is not in the allowlist. Please specify a path that is allowed in your configuration.", level: :warn
+            )
           end
           return
         end
@@ -93,14 +97,15 @@ module Devagent
       # "modify X", "improve X", "refactor X" with file paths should be CODE_EDIT
       if %w[EXPLANATION GENERAL].include?(state.intent)
         task_lower = task.to_s.downcase
-        has_file_path = task_lower.match?(/\b([a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
+        has_file_path = task_lower.match?(%r{\b([a-zA-Z0-9_\-./]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b}i)
         is_modify_request = task_lower.match?(/\b(modify|improve|refactor|enhance|update|change)\s+.*\b(to|it|this)\b/i) ||
-                            task_lower.match?(/\b(modify|improve|refactor|enhance|update|change)\s+[a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json)\b/i)
+                            task_lower.match?(%r{\b(modify|improve|refactor|enhance|update|change)\s+[a-zA-Z0-9_\-./]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json)\b}i)
 
         if has_file_path && is_modify_request
           state.intent = "CODE_EDIT"
           state.intent_confidence = [state.intent_confidence, 0.8].max
-          context.tracer.event("intent_override", original: intent["intent"], new: "CODE_EDIT", reason: "modify request with file path")
+          context.tracer.event("intent_override", original: intent["intent"], new: "CODE_EDIT",
+                                                  reason: "modify request with file path")
         end
       end
 
@@ -143,9 +148,7 @@ module Devagent
         streamer.say("Goal attempt #{goal_attempt}/#{max_goal_attempts}") unless quiet?
 
         # Reset state for new attempt (keep goal, intent, but clear execution artifacts)
-        if goal_attempt > 1
-          state = reset_state_for_retry(state, goal)
-        end
+        state = reset_state_for_retry(state, goal) if goal_attempt > 1
 
         state.phase = :planning
 
@@ -164,7 +167,10 @@ module Devagent
         context.tracer.event("goal_validation", satisfied: validation[:satisfied], reason: validation[:reason])
 
         if validation[:satisfied]
-          streamer.say("✔ Goal satisfied after #{goal_attempt} attempt(s): #{validation[:reason]}", level: :success) unless quiet?
+          unless quiet?
+            streamer.say("✔ Goal satisfied after #{goal_attempt} attempt(s): #{validation[:reason]}",
+                         level: :success)
+          end
           log_successful_execution(task, state)
           return
         end
@@ -172,7 +178,8 @@ module Devagent
         # STAGNATION DETECTION: Check if we're making progress
         current_diff = GitDiff.current(context.repo_path)
         plan_fp = state.plan ? fingerprint_plan(state.plan) : nil
-        @stagnation_detector.record_state(diff: current_diff, plan_fingerprint: plan_fp, observations: state.observations)
+        @stagnation_detector.record_state(diff: current_diff, plan_fingerprint: plan_fp,
+                                          observations: state.observations)
         stagnation = @stagnation_detector.stagnant?
 
         if stagnation[:stagnant]
@@ -193,7 +200,10 @@ module Devagent
 
       # Exhausted attempts or stopped early
       if goal_attempt >= max_goal_attempts
-        streamer.say("✖ Max goal attempts (#{max_goal_attempts}) reached without satisfying goal", level: :warn) unless quiet?
+        unless quiet?
+          streamer.say("✖ Max goal attempts (#{max_goal_attempts}) reached without satisfying goal",
+                       level: :warn)
+        end
       end
 
       # Generate final answer if we have observations
@@ -202,7 +212,7 @@ module Devagent
 
     # Run a single attempt at the goal (plan → execute → observe → decide)
     # This is the inner loop that was previously the main loop
-    def run_single_attempt(state, task, goal, max_cycles:)
+    def run_single_attempt(state, task, _goal, max_cycles:)
       until %i[done halted].include?(state.phase)
         case state.phase
         when :planning
@@ -217,10 +227,18 @@ module Devagent
             visible_tools = Array(visible_tools).reject { |t| t.respond_to?(:category) && t.category.to_s == "git" }
           end
 
-            # Use new Planning::Planner with hard contract
+          # Use new Planning::Planner with hard contract
           begin
+            # Extract previous errors related to linting tools
+            previous_linting_errors = state.errors.select do |err|
+              msg = err.is_a?(Hash) ? (err[:message] || err["message"]).to_s : err.to_s
+              msg.match?(/flake8|black|pylint|eslint|prettier|No module named|No such file or directory|command not found/i)
+            end.map do |err|
+              err.is_a?(Hash) ? (err[:message] || err["message"]).to_s : err.to_s
+            end
+
             new_plan = with_spinner("Planning") do
-              @new_planner.call(task)
+              @new_planner.call(task, previous_errors: previous_linting_errors)
             end
 
             # Convert Planning::Plan to old Plan struct for compatibility
@@ -235,7 +253,7 @@ module Devagent
             unless quiet?
               plan.steps.each do |step|
                 context.tracer.event("plan_step", step_id: step["step_id"], action: step["action"],
-                                           path: step["path"], command: step["command"])
+                                                  path: step["path"], command: step["command"])
               end
             end
 
@@ -248,7 +266,9 @@ module Devagent
               unless quiet?
                 streamer.say("Plan steps were:", level: :warn)
                 plan.steps.each do |step|
-                  streamer.say("  Step #{step['step_id']}: #{step['action']} - path: #{step['path']}, command: #{step['command']}", level: :warn)
+                  streamer.say(
+                    "  Step #{step["step_id"]}: #{step["action"]} - path: #{step["path"]}, command: #{step["command"]}", level: :warn
+                  )
                 end
               end
               state.record_error(signature: "plan_rejected", message: e.message)
@@ -256,9 +276,7 @@ module Devagent
               raise PlanningFailed, "Plan validation failed: #{e.message}"
             end
 
-            if plan.steps.empty?
-              raise PlanningFailed, "Plan has no steps"
-            end
+            raise PlanningFailed, "Plan has no steps" if plan.steps.empty?
           rescue PlanningFailed => e
             streamer.say("Planning failed: #{e.message}", level: :error) unless quiet?
             state.record_error(signature: "planning_failed", message: e.message)
@@ -415,7 +433,8 @@ module Devagent
 
         # Normalize path before using it (remove ./ prefix, handle leading /)
         normalized_path = normalize_path_for_validation(path.to_s)
-        raise Error, "file already exists: #{normalized_path}" if File.exist?(File.join(context.repo_path, normalized_path))
+        raise Error, "file already exists: #{normalized_path}" if File.exist?(File.join(context.repo_path,
+                                                                                        normalized_path))
 
         raise Error, "content required" if content.to_s.empty?
 
@@ -438,56 +457,54 @@ module Devagent
 
         # If content field is present (from converted fs.create), generate replacement diff
         # Otherwise, use DiffGenerator to generate diff based on goal/reason
-        if content && !content.to_s.empty?
-          # Generate a replacement diff (replace entire file content)
-          diff = build_replace_file_diff(path: normalized_path, original: original, new_content: content.to_s)
-        else
-          # Use DiffGenerator for LLM-based diff generation
-          diff = DiffGenerator.new(context).generate(
-            path: normalized_path,
-            original: original,
-            goal: plan.goal.to_s,
-            reason: step["reason"].to_s,
-            file_exists: true
-          )
-        end
+        diff = if content && !content.to_s.empty?
+                 # Generate a replacement diff (replace entire file content)
+                 build_replace_file_diff(path: normalized_path, original: original, new_content: content.to_s)
+               else
+                 # Use DiffGenerator for LLM-based diff generation
+                 DiffGenerator.new(context).generate(
+                   path: normalized_path,
+                   original: original,
+                   goal: plan.goal.to_s,
+                   reason: step["reason"].to_s,
+                   file_exists: true
+                 )
+               end
 
         # Validate diff before applying (catch issues early)
         begin
           tool_invoke_with_policy(state, "fs.write_diff", "path" => normalized_path, "diff" => diff)
         rescue Error => e
-          if e.message.include?("diff apply failed") || e.message.include?("patch")
-            # Diff failed to apply - try fallback: generate complete new content and write directly
-            context.tracer.event("diff_apply_failed_fallback", path: normalized_path) if context.respond_to?(:tracer)
+          raise unless e.message.include?("diff apply failed") || e.message.include?("patch")
 
-            # Re-read file to get current content
-            current_content = context.tool_bus.read_file("path" => normalized_path).fetch("content")
+          # Diff failed to apply - try fallback: generate complete new content and write directly
+          context.tracer.event("diff_apply_failed_fallback", path: normalized_path) if context.respond_to?(:tracer)
 
-            # Fallback: Generate complete new file content instead of trying to apply diff
-            # This is more reliable when diff format is problematic
-            new_content = generate_complete_file_content(
-              file_path: normalized_path,
-              original_content: current_content,
-              goal: plan.goal.to_s,
-              reason: step["reason"].to_s
-            )
+          # Re-read file to get current content
+          current_content = context.tool_bus.read_file("path" => normalized_path).fetch("content")
 
-            # Write the complete content directly using tool_bus.write_file (bypassing diff)
-            # This is a fallback when diff application fails
-            context.tool_bus.write_file("path" => normalized_path, "content" => new_content)
+          # Fallback: Generate complete new file content instead of trying to apply diff
+          # This is more reliable when diff format is problematic
+          new_content = generate_complete_file_content(
+            file_path: normalized_path,
+            original_content: current_content,
+            goal: plan.goal.to_s,
+            reason: step["reason"].to_s
+          )
 
-            # Record the write in state
-            state.record_observation({
-              "type" => "FILE_WRITTEN",
-              "path" => normalized_path,
-              "method" => "direct_write_fallback"
-            })
+          # Write the complete content directly using tool_bus.write_file (bypassing diff)
+          # This is a fallback when diff application fails
+          context.tool_bus.write_file("path" => normalized_path, "content" => new_content)
 
-            # Return success result (execute_step expects this format)
-            return { "success" => true, "artifact" => { "path" => normalized_path, "content" => new_content } }
-          else
-            raise
-          end
+          # Record the write in state
+          state.record_observation({
+                                     "type" => "FILE_WRITTEN",
+                                     "path" => normalized_path,
+                                     "method" => "direct_write_fallback"
+                                   })
+
+          # Return success result (execute_step expects this format)
+          { "success" => true, "artifact" => { "path" => normalized_path, "content" => new_content } }
         end
       when "fs.delete", "fs_delete"
         raise Error, "path required" if path.to_s.empty?
@@ -516,18 +533,180 @@ module Devagent
         # Check if command failed with "unknown option" or similar error
         # If so, suggest running with --help
         if result.is_a?(Hash) && result["exit_code"].to_i != 0
-          stderr = result["stderr"].to_s.downcase
-          stdout = result["stdout"].to_s.downcase
-          error_text = stderr + " " + stdout
+          stderr = result["stderr"].to_s
+          stdout = result["stdout"].to_s
+          error_text = (stderr + " " + stdout).downcase
+          original_stderr = stderr # Keep original case for better error messages
 
           # Check for common "unknown option" errors
           if error_text.match?(/\b(unknown|invalid|unrecognized|illegal).*(option|flag|argument|parameter)\b/) ||
              error_text.include?("usage:") || error_text.include?("try") || error_text.include?("--help")
             # Command failed due to unknown option - suggest help
             help_cmd = "#{tokens.first} --help"
-            context.tracer.event("command_unknown_option", command: cmd, suggestion: help_cmd) if context.respond_to?(:tracer)
+            if context.respond_to?(:tracer)
+              context.tracer.event("command_unknown_option", command: cmd,
+                                                             suggestion: help_cmd)
+            end
             # Don't fail here - let the planner retry with --help if needed
             # The error will be recorded in state for the planner to see
+          end
+
+          # Check for missing npm scripts
+          # Match patterns like: "npm error Missing script: lint:fix" or "Missing script: lint"
+          # Also check for "npm ERR!" which is another npm error format
+          has_missing_script = error_text.include?("missing script") ||
+                               (error_text.include?("npm err") && error_text.include?("missing")) ||
+                               (error_text.include?("npm err!") && error_text.include?("missing"))
+
+          if has_missing_script
+            # Extract script name from error (e.g., "Missing script: lint:fix" or "npm error Missing script: lint")
+            script_match = original_stderr.match(/missing script[:\s]+['"]?([^'"]+)['"]?/i) ||
+                           original_stderr.match(/npm err[^:]*missing[^:]*:\s*['"]?([^'"]+)['"]?/i) ||
+                           original_stderr.match(/npm err[^:]*:\s*['"]?([^'"]+)['"]?/i)
+            script_name = script_match ? script_match[1].strip : nil
+
+            # If we couldn't extract script name, try to find it in the command itself
+            if script_name.nil? && cmd.include?("npm run")
+              # Extract script name from command like "npm run lint:fix"
+              cmd_match = cmd.match(/npm\s+run\s+([^\s]+)/i)
+              script_name = cmd_match ? cmd_match[1] : nil
+            end
+
+            # Propose installation command
+            install_cmd = if script_name && !script_name.match?(/lint|eslint|prettier/i)
+                            # Install the specific package mentioned in the script name
+                            "npm install #{script_name} --save-dev"
+                          else
+                            # Script is linting-related or name not detected, install common linting tools
+                            "npm install eslint prettier --save-dev"
+                          end
+
+            # Ask for user consent
+            unless quiet?
+              streamer.say("", level: :warn)
+              streamer.say("⚠️  Missing npm script detected: #{script_name || "unknown"}", level: :warn)
+              streamer.say("", level: :warn)
+            end
+
+            consent = ui.prompt.confirm(
+              "Would you like me to run '#{install_cmd}' to install the missing dependencies?",
+              default: false
+            )
+
+            if consent
+              streamer.say("Installing dependencies...", level: :info) unless quiet?
+              install_tokens = Shellwords.split(install_cmd)
+              install_result = tool_invoke_with_policy(
+                state,
+                "exec.run",
+                "program" => install_tokens.first,
+                "args" => install_tokens.drop(1)
+              )
+
+              if install_result.is_a?(Hash) && install_result["exit_code"].to_i == 0
+                unless quiet?
+                  streamer.say("✓ Dependencies installed successfully", level: :success)
+                  streamer.say("Retrying original command...", level: :info)
+                end
+                # Retry the original command
+                result = tool_invoke_with_policy(
+                  state,
+                  "exec.run",
+                  "program" => tokens.first,
+                  "args" => tokens.drop(1),
+                  "accepted_exit_codes" => step["accepted_exit_codes"],
+                  "allow_failure" => step["allow_failure"]
+                )
+              else
+                streamer.say("✗ Installation failed. Continuing without dependencies.", level: :error) unless quiet?
+                if context.respond_to?(:tracer)
+                  context.tracer.event("dependency_install_failed", command: install_cmd,
+                                                                    error: install_result["stderr"])
+                end
+              end
+            else
+              unless quiet?
+                streamer.say("Skipping dependency installation. Continuing without dependencies.", level: :warn)
+              end
+              context.tracer.event("dependency_install_declined", command: install_cmd) if context.respond_to?(:tracer)
+            end
+          end
+
+          # Check for missing Python packages
+          if error_text.include?("no module named") && !error_text.include?("command not found")
+            # Extract module name from error (e.g., "No module named 'flake8'")
+            module_match = original_stderr.match(/no module named ['"]?([^'"]+)['"]?/i)
+            module_name = module_match ? module_match[1].strip : nil
+
+            if module_name
+              install_cmd = "pip install #{module_name}"
+
+              # Ask for user consent
+              unless quiet?
+                streamer.say("", level: :warn)
+                streamer.say("⚠️  Missing Python package detected: #{module_name}", level: :warn)
+                streamer.say("", level: :warn)
+              end
+
+              consent = ui.prompt.confirm(
+                "Would you like me to run '#{install_cmd}' to install the missing package?",
+                default: false
+              )
+
+              if consent
+                streamer.say("Installing package...", level: :info) unless quiet?
+                install_tokens = Shellwords.split(install_cmd)
+                install_result = tool_invoke_with_policy(
+                  state,
+                  "exec.run",
+                  "program" => install_tokens.first,
+                  "args" => install_tokens.drop(1)
+                )
+
+                if install_result.is_a?(Hash) && install_result["exit_code"].to_i == 0
+                  unless quiet?
+                    streamer.say("✓ Package installed successfully", level: :success)
+                    streamer.say("Retrying original command...", level: :info)
+                  end
+                  # Retry the original command
+                  result = tool_invoke_with_policy(
+                    state,
+                    "exec.run",
+                    "program" => tokens.first,
+                    "args" => tokens.drop(1),
+                    "accepted_exit_codes" => step["accepted_exit_codes"],
+                    "allow_failure" => step["allow_failure"]
+                  )
+                else
+                  streamer.say("✗ Installation failed. Continuing without package.", level: :error) unless quiet?
+                  if context.respond_to?(:tracer)
+                    context.tracer.event("dependency_install_failed", command: install_cmd,
+                                                                      error: install_result["stderr"])
+                  end
+                end
+              else
+                streamer.say("Skipping package installation. Continuing without package.", level: :warn) unless quiet?
+                if context.respond_to?(:tracer)
+                  context.tracer.event("dependency_install_declined",
+                                       command: install_cmd)
+                end
+              end
+            end
+          end
+
+          # Check for "No such file or directory" or "No module named" errors
+          # These indicate the tool isn't installed - treat as non-fatal for linting commands
+          if (error_text.include?("no such file or directory") ||
+              error_text.include?("command not found")) &&
+             (cmd.match?(/\b(rubocop|flake8|pylint|black|eslint|prettier|lint)\b/i) ||
+              step["allow_failure"] == true)
+            # Linting tool not available - mark as success with allow_failure
+            # This allows the plan to continue even if linting tools aren't installed
+            if context.respond_to?(:tracer)
+              context.tracer.event("linting_tool_unavailable", command: cmd,
+                                                               error: error_text)
+            end
+            return { "success" => true, "artifact" => result, "warning" => "Linting tool not available: #{cmd}" }
           end
         end
 
@@ -669,13 +848,13 @@ module Devagent
       # Extract directory paths from allowlist patterns (e.g., "lib/**" -> "lib")
       # Skip patterns like "README*" that are file patterns, not directories
       allowed_dirs = allowlist
-        .map { |pattern| pattern.gsub(/\*\*?$/, "").chomp("/") }
-        .reject { |dir| dir.empty? || dir.include?("*") || dir.include?("?") }
-        .select { |dir|
-          full_path = File.join(context.repo_path, dir)
-          # Check if it's a directory and if files in it would be allowed
-          Dir.exist?(full_path) && context.tool_bus.safety.allowed?("#{dir}/test.rb")
-        }
+                     .map { |pattern| pattern.gsub(/\*\*?$/, "").chomp("/") }
+                     .reject { |dir| dir.empty? || dir.include?("*") || dir.include?("?") }
+                     .select do |dir|
+        full_path = File.join(context.repo_path, dir)
+        # Check if it's a directory and if files in it would be allowed
+        Dir.exist?(full_path) && context.tool_bus.safety.allowed?("#{dir}/test.rb")
+      end
         .sort
 
       if allowed_dirs.empty?
@@ -700,7 +879,7 @@ module Devagent
 
     # When planning yields no actions, answer the user's question directly using
     # the developer model and light repository context.
-    def answer_unactionable(task, confidence, use_repo_context: true)
+    def answer_unactionable(task, _confidence, use_repo_context: true)
       # Security: Don't process "list all files" requests - these should have been rejected earlier
       if should_reject_file_listing_request?(task)
         unless quiet?
@@ -772,7 +951,7 @@ module Devagent
                     safe_index_retrieve(task, limit: 4).map do |snippet|
                       # Truncate long snippets
                       text = snippet["text"].to_s
-                      text = text.length > 500 ? "#{text[0..500]}... (truncated)" : text
+                      text = "#{text[0..500]}... (truncated)" if text.length > 500
                       "#{snippet["path"]}:\n#{text}\n---"
                     end.join("\n")
                   else
@@ -804,7 +983,7 @@ module Devagent
       history = safe_session_history(limit: 3).map do |turn|
         content = turn["content"].to_s
         # Truncate long history entries
-        content = content.length > 200 ? "#{content[0..200]}... (truncated)" : content
+        content = "#{content[0..200]}... (truncated)" if content.length > 200
         "#{turn["role"]}: #{content}"
       end.join("\n")
 
@@ -815,7 +994,11 @@ module Devagent
         Recent conversation:
         #{history}
 
-        #{"Directory structure:\n#{dir_structure}\n\n" unless dir_structure.empty?}#{"Documentation:\n#{readme_content}\n\n" unless readme_content.empty?}Repository context:
+        #{unless dir_structure.empty?
+            "Directory structure:\n#{dir_structure}\n\n"
+          end}#{unless readme_content.empty?
+                                                                                       "Documentation:\n#{readme_content}\n\n"
+                                                                                     end}Repository context:
         #{retrieved.empty? ? "(none)" : retrieved}
 
         Question:
@@ -839,7 +1022,7 @@ module Devagent
       history = safe_session_history(limit: 3).map do |turn|
         content = turn["content"].to_s
         # Truncate long history entries
-        content = content.length > 200 ? "#{content[0..200]}... (truncated)" : content
+        content = "#{content[0..200]}... (truncated)" if content.length > 200
         "#{turn["role"]}: #{content}"
       end.join("\n")
 
@@ -982,6 +1165,24 @@ module Devagent
     end
 
     def validate_plan!(state, plan, visible_tools:)
+      # First, validate and normalize all step_ids to ensure they are integers
+      plan.steps.each do |step|
+        step_id = step["step_id"]
+        if step_id.is_a?(Hash)
+          # If step_id is a hash, try to extract the actual step_id value
+          normalized_id = step_id["step_id"] || step_id[:step_id] || step_id["id"] || step_id[:id]
+          if normalized_id
+            step["step_id"] = normalized_id.to_i
+          else
+            raise Error, "Invalid step_id format in step: #{step.inspect}. step_id must be an integer, not a hash."
+          end
+        elsif !step_id.is_a?(Integer) && !step_id.is_a?(String)
+          raise Error, "Invalid step_id format: #{step_id.inspect}. step_id must be an integer or string."
+        else
+          # Normalize to integer
+          step["step_id"] = step_id.to_i
+        end
+      end
       # For command-only plans (checking tools like rubocop), allow lower confidence
       # since these are straightforward tasks
       has_commands = plan.steps.any? { |s| %w[exec.run run_command run_tests].include?(s["action"].to_s) }
@@ -1020,7 +1221,7 @@ module Devagent
         next unless %w[exec.run run_command run_tests].include?(s["action"].to_s)
 
         cmd = s["command"].to_s.strip
-        raise Error, "exec.run step #{s['step_id']} requires a 'command' field" if cmd.empty?
+        raise Error, "exec.run step #{s["step_id"]} requires a 'command' field" if cmd.empty?
       end
 
       # Enforce: fs.create must only target non-existent files, and should not require dependencies.
@@ -1043,7 +1244,9 @@ module Devagent
         # Enforce: In devagent gem, new files MUST use playground/, not lib/
         if is_devagent_gem && !File.exist?(File.join(context.repo_path.to_s, normalized_path))
           if normalized_path.start_with?("lib/") && !normalized_path.start_with?("lib/devagent/")
-            raise Error, "In devagent gem, new files must use playground/ directory, not lib/. Use 'playground/#{normalized_path.sub(/\Alib\//, "")}' instead of '#{normalized_path}'"
+            raise Error,
+                  "In devagent gem, new files must use playground/ directory, not lib/. Use 'playground/#{normalized_path.sub(%r{\Alib/},
+                                                                                                                              "")}' instead of '#{normalized_path}'"
           end
         end
 
@@ -1066,35 +1269,79 @@ module Devagent
         # File exists - convert fs.create to fs.read + fs.write
         # This provides a graceful fallback when user says "create" but file exists
         unless quiet?
-          streamer.say("Note: File #{normalized_path} already exists. Converting 'create' to 'modify' operation.", level: :info)
+          streamer.say("Note: File #{normalized_path} already exists. Converting 'create' to 'modify' operation.",
+                       level: :info)
         end
 
         # Use the original step_id for the read step to preserve dependencies
         # This ensures any steps that depend on this step still work
-        original_step_id = s["step_id"].to_i
+        # Safely extract step_id (handle both integer and string)
+        original_step_id = case s["step_id"]
+                           when Integer
+                             s["step_id"]
+                           when String
+                             s["step_id"].to_i
+                           when Hash
+                             s["step_id"]["step_id"]&.to_i || s["step_id"][:step_id]&.to_i || raise(Error, "Invalid step_id format: #{s["step_id"].inspect}")
+                           else
+                             s["step_id"].respond_to?(:to_i) ? s["step_id"].to_i : raise(Error, "Invalid step_id format: #{s["step_id"].inspect}")
+                           end
 
         # Find the highest step_id for the write step
-        max_step_id = plan.steps.map { |step| step["step_id"].to_i }.max || 0
+        # Safely extract step_ids, handling different formats
+        max_step_id = plan.steps.map do |step|
+          case step["step_id"]
+          when Integer
+            step["step_id"]
+          when String
+            step["step_id"].to_i
+          when Hash
+            step["step_id"]["step_id"]&.to_i || step["step_id"][:step_id]&.to_i || 0
+          else
+            step["step_id"].respond_to?(:to_i) ? step["step_id"].to_i : 0
+          end
+        end.max || 0
         write_step_id = max_step_id + 1
 
         # Create fs.read step (use original step_id to preserve dependencies)
+        # Safely convert depends_on to integers
+        read_depends_on = if s["depends_on"].nil? || s["depends_on"].empty?
+                            []
+                          else
+                            Array(s["depends_on"]).map do |dep|
+                              case dep
+                              when Integer
+                                dep
+                              when String
+                                dep.to_i
+                              when Hash
+                                dep["step_id"]&.to_i || dep[:step_id]&.to_i
+                              else
+                                dep.respond_to?(:to_i) ? dep.to_i : nil
+                              end
+                            end.compact
+                          end
+
         read_step = {
           "step_id" => original_step_id.to_i,
           "action" => "fs.read",
           "path" => normalized_path,
           "reason" => "Read existing file to prepare for modification",
-          "depends_on" => Array(s["depends_on"] || []).map(&:to_i) # Preserve original dependencies, ensure integers
+          "depends_on" => read_depends_on
         }
 
         # Convert fs.create to fs.write
-        # Preserve the content field so we can generate a replacement diff
+        # IMPORTANT: Do NOT preserve the content field - it contains only the new content, not the complete file
+        # Instead, let DiffGenerator generate a proper diff that adds to the existing content
         write_step = {
           "step_id" => write_step_id.to_i,
           "action" => "fs.write",
           "path" => normalized_path,
           "reason" => s["reason"] || "Update file with new content",
-          "depends_on" => [original_step_id.to_i], # Depend on the read step (which has original step_id), ensure integer
-          "content" => s["content"] # Preserve content for replacement diff generation
+          "depends_on" => [original_step_id.to_i] # Depend on the read step (which has original step_id), ensure integer
+          # NOTE: We intentionally do NOT include "content" field here
+          # This forces DiffGenerator to be used, which will generate a proper diff that modifies the file
+          # instead of replacing it entirely
         }
 
         # Replace the fs.create step with fs.read, then add fs.write after it
@@ -1106,36 +1353,66 @@ module Devagent
         # IMPORTANT: Exclude the write_step itself from this update (it should depend on the read step, not itself)
         plan.steps.each do |other_step|
           # Skip the write_step we just created - it should depend on the read step, not itself
-          next if other_step["step_id"].to_i == write_step_id.to_i
+          # Safely extract step_id for comparison
+          other_step_id = case other_step["step_id"]
+                          when Integer
+                            other_step["step_id"]
+                          when String
+                            other_step["step_id"].to_i
+                          when Hash
+                            other_step["step_id"]["step_id"]&.to_i || other_step["step_id"][:step_id]&.to_i || 0
+                          else
+                            other_step["step_id"].respond_to?(:to_i) ? other_step["step_id"].to_i : 0
+                          end
+          next if other_step_id == write_step_id.to_i
 
-          depends_on = Array(other_step["depends_on"]).map(&:to_i)
-          if depends_on.include?(original_step_id.to_i)
-            # Replace dependency on original step with dependency on write step
-            depends_on = depends_on.map { |dep| dep == original_step_id.to_i ? write_step_id.to_i : dep }
-            other_step["depends_on"] = depends_on.uniq
+          # Safely extract and convert depends_on to integers
+          depends_on_raw = other_step["depends_on"]
+          next if depends_on_raw.nil? || depends_on_raw.empty?
+
+          # Handle both array and single value, and ensure all values are integers
+          depends_on = Array(depends_on_raw).filter_map do |dep|
+            case dep
+            when Integer
+              dep
+            when String
+              dep.to_i
+            when Hash
+              # If it's a hash, try to extract step_id from it, or return nil to skip
+              dep["step_id"]&.to_i || dep[:step_id]&.to_i
+            else
+              dep.respond_to?(:to_i) ? dep.to_i : nil
+            end
           end
+
+          next unless depends_on.include?(original_step_id.to_i)
+
+          # Replace dependency on original step with dependency on write step
+          depends_on = depends_on.map { |dep| dep == original_step_id.to_i ? write_step_id.to_i : dep }
+          other_step["depends_on"] = depends_on.uniq
         end
 
         # Log this transformation
+        next unless context.respond_to?(:tracer)
+
         context.tracer.event("fs_create_to_read_write",
-          original_step_id: original_step_id,
-          read_step_id: original_step_id,
-          write_step_id: write_step_id,
-          path: normalized_path
-        ) if context.respond_to?(:tracer)
+                             original_step_id: original_step_id,
+                             read_step_id: original_step_id,
+                             write_step_id: write_step_id,
+                             path: normalized_path)
       end
 
       # Enforce: every fs.write depends on a prior fs.read of the same path.
       # Build reads hash AFTER transformations (so transformed steps are included)
       reads = {}
       plan.steps.each do |s|
-        if %w[fs.read fs_read].include?(s["action"].to_s)
-          path = s["path"].to_s
-          normalized_path = normalize_path_for_validation(path)
-          # Use integer step_id as key to match depends_on values
-          step_id = s["step_id"].to_i
-          reads[step_id] = normalized_path
-        end
+        next unless %w[fs.read fs_read].include?(s["action"].to_s)
+
+        path = s["path"].to_s
+        normalized_path = normalize_path_for_validation(path)
+        # Use integer step_id as key to match depends_on values
+        step_id = s["step_id"].to_i
+        reads[step_id] = normalized_path
       end
 
       # Enforce: fs.read must only target existing files.
@@ -1167,7 +1444,8 @@ module Devagent
         # Check if any fs.create step targets the same path (compare normalized paths)
         conflicting_create = creates.find { |_step_id, create_path| create_path == normalized_path }
         if conflicting_create
-          raise Error, "plan cannot use both fs.create and fs.write for the same file: #{normalized_path}. Use fs.create with content field instead."
+          raise Error,
+                "plan cannot use both fs.create and fs.write for the same file: #{normalized_path}. Use fs.create with content field instead."
         end
 
         full = File.join(context.repo_path.to_s, normalized_path)
@@ -1175,22 +1453,25 @@ module Devagent
 
         deps = Array(s["depends_on"]).map(&:to_i)
         dep_paths = deps.filter_map { |id| reads[id] }
-        unless dep_paths.include?(normalized_path)
-          # Debug: log what we found
+        next if dep_paths.include?(normalized_path)
+
+        # Debug: log what we found
+        if context.respond_to?(:tracer)
           context.tracer.event("fs_write_dependency_check_failed",
-            write_step_id: s["step_id"],
-            write_path: normalized_path,
-            depends_on: deps,
-            reads_hash: reads,
-            dep_paths: dep_paths
-          ) if context.respond_to?(:tracer)
-          raise Error, "fs.write must depend_on prior fs.read of same path (#{normalized_path}). Write step #{s['step_id']} depends on #{deps.inspect}, but reads hash has: #{reads.inspect}"
+                               write_step_id: s["step_id"],
+                               write_path: normalized_path,
+                               depends_on: deps,
+                               reads_hash: reads,
+                               dep_paths: dep_paths)
         end
+        raise Error,
+              "fs.write must depend_on prior fs.read of same path (#{normalized_path}). Write step #{s["step_id"]} depends on #{deps.inspect}, but reads hash has: #{reads.inspect}"
       end
 
       # Only fingerprint AFTER all validation checks pass.
       fp = fingerprint_plan(plan)
       raise Error, "plan repeated without progress" if state.plan_fingerprints.include?(fp)
+
       state.plan_fingerprints << fp
     end
 
@@ -1208,7 +1489,7 @@ module Devagent
       return normalized if normalized.empty?
 
       # Remove ./ prefix
-      normalized = normalized.sub(/\A\.\//, "")
+      normalized = normalized.sub(%r{\A\./}, "")
 
       # If path starts with /, try to normalize it (but be conservative)
       if normalized.start_with?("/")
@@ -1225,7 +1506,7 @@ module Devagent
 
         # For other paths starting with / (like /lib/hello.rb), check if they're in the repo
         # Try normalizing: remove leading / and check if it would be inside repo
-        test_path = normalized.sub(/\A\//, "")
+        test_path = normalized.sub(%r{\A/}, "")
         test_absolute = File.expand_path(File.join(context.repo_path.to_s, test_path))
         repo_root = File.expand_path(context.repo_path.to_s)
         # Only normalize if the test path would be inside the repo
@@ -1303,7 +1584,7 @@ module Devagent
         "about", "description", "purpose", "what does", "what do",
         "explain this repo", "explain this repository", "explain this project",
         "read", "show me", "what files", "what's in"
-        # Note: "list files" removed - use should_reject_file_listing_request? instead
+        # NOTE: "list files" removed - use should_reject_file_listing_request? instead
       ]
 
       # Questions about specific classes/components in the repository need file access
@@ -1332,7 +1613,7 @@ module Devagent
 
       # Look for path-like patterns: "in lib/", "in docs/", "in app/", etc.
       # But exclude "this" followed by repo/repository/project/codebase
-      path_pattern = /\b(in|of|from)\s+([a-zA-Z0-9_\-\.\/]+(?:\/[a-zA-Z0-9_\-\.\/]*)?)\b/i
+      path_pattern = %r{\b(in|of|from)\s+([a-zA-Z0-9_\-./]+(?:/[a-zA-Z0-9_\-./]*)?)\b}i
       path_match = original_text.match(path_pattern)
       return nil if path_match.nil?
 
@@ -1424,8 +1705,6 @@ module Devagent
                        "rubocop"
                      elsif text.match?(/\b(test|spec|rspec)\b/i)
                        "rspec"
-                     else
-                       nil
                      end
 
       return nil unless base_command
@@ -1446,9 +1725,7 @@ module Devagent
 
       # For status checks, accept exit codes 0 and 1 (success and found issues)
       # This prevents the step from being marked as "failed" when we successfully got the status
-      if is_status_check
-        step["accepted_exit_codes"] = [0, 1]
-      end
+      step["accepted_exit_codes"] = [0, 1] if is_status_check
 
       steps = [step]
 
@@ -1471,31 +1748,37 @@ module Devagent
 
       # Extract file path from common patterns
       # Patterns: "add X to file.rb", "add X at the top of file.rb", "add X in file.rb", "modify lib/file.rb"
-      file_path_match = task.to_s.match(/\b(?:at\s+the\s+top\s+of|in|to|at|modify|update|change|edit|refactor|improve)\s+([a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
+      file_path_match = task.to_s.match(%r{\b(?:at\s+the\s+top\s+of|in|to|at|modify|update|change|edit|refactor|improve)\s+([a-zA-Z0-9_\-./]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b}i)
       file_path = file_path_match ? file_path_match[1] : nil
 
       # If no file path found, try to extract from anywhere in the task
       unless file_path
         # Look for file paths with common extensions anywhere in the text
         # Matches patterns like "lib/file.rb", "src/file.js", etc.
-        any_match = task.to_s.match(/\b([a-zA-Z0-9_\-\.\/]+\/(?:[a-zA-Z0-9_\-\.\/]+\/)*[a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
+        any_match = task.to_s.match(%r{\b([a-zA-Z0-9_\-./]+/(?:[a-zA-Z0-9_\-./]+/)*[a-zA-Z0-9_\-./]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b}i)
         file_path = any_match[1] if any_match
       end
 
       # If still no match, try simple filename patterns
       unless file_path
-        simple_match = task.to_s.match(/\b([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)\b/i)
+        simple_match = task.to_s.match(%r{\b([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)\b}i)
         file_path = simple_match[1] if simple_match
       end
 
       unless file_path
-        context.tracer.event("minimal_edit_plan_failed", reason: "Could not extract file path from task", task: task.to_s) if context.respond_to?(:tracer)
+        if context.respond_to?(:tracer)
+          context.tracer.event("minimal_edit_plan_failed", reason: "Could not extract file path from task",
+                                                           task: task.to_s)
+        end
         return nil
       end
 
       # Validate the file path is allowed
       unless context.tool_bus.safety.allowed?(file_path)
-        context.tracer.event("minimal_edit_plan_failed", reason: "File path not in allowlist", path: file_path) if context.respond_to?(:tracer)
+        if context.respond_to?(:tracer)
+          context.tracer.event("minimal_edit_plan_failed", reason: "File path not in allowlist",
+                                                           path: file_path)
+        end
         return nil
       end
 
@@ -1532,29 +1815,35 @@ module Devagent
       # This handles cases like "create a new file lib/hello.rb that prints hello"
 
       # Extract file path - look for patterns like "create file path/to/file.rb"
-      file_path_match = task.to_s.match(/\b(?:create|new|add)\s+(?:a\s+)?(?:new\s+)?file\s+([a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
+      file_path_match = task.to_s.match(%r{\b(?:create|new|add)\s+(?:a\s+)?(?:new\s+)?file\s+([a-zA-Z0-9_\-./]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b}i)
       file_path = file_path_match ? file_path_match[1] : nil
 
       # If no match, try to find file path anywhere in the text
       unless file_path
-        any_match = task.to_s.match(/\b([a-zA-Z0-9_\-\.\/]+\/(?:[a-zA-Z0-9_\-\.\/]+\/)*[a-zA-Z0-9_\-\.\/]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b/i)
+        any_match = task.to_s.match(%r{\b([a-zA-Z0-9_\-./]+/(?:[a-zA-Z0-9_\-./]+/)*[a-zA-Z0-9_\-./]+\.(?:rb|js|ts|py|java|go|rs|php|tsx|jsx|md|txt|yml|yaml|json))\b}i)
         file_path = any_match[1] if any_match
       end
 
       # If still no match, try simple filename
       unless file_path
-        simple_match = task.to_s.match(/\b([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)\b/i)
+        simple_match = task.to_s.match(%r{\b([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)\b}i)
         file_path = simple_match[1] if simple_match
       end
 
       unless file_path
-        context.tracer.event("minimal_create_plan_failed", reason: "Could not extract file path from task", task: task.to_s) if context.respond_to?(:tracer)
+        if context.respond_to?(:tracer)
+          context.tracer.event("minimal_create_plan_failed", reason: "Could not extract file path from task",
+                                                             task: task.to_s)
+        end
         return nil
       end
 
       # Validate the file path is allowed
       unless context.tool_bus.safety.allowed?(file_path)
-        context.tracer.event("minimal_create_plan_failed", reason: "File path not allowed (may be in denylist)", path: file_path) if context.respond_to?(:tracer)
+        if context.respond_to?(:tracer)
+          context.tracer.event("minimal_create_plan_failed", reason: "File path not allowed (may be in denylist)",
+                                                             path: file_path)
+        end
         return nil
       end
 
@@ -1562,7 +1851,9 @@ module Devagent
       # Extract what the file should do from the task
       content_description = task.to_s
       # Remove the "create file X" part to get the content description
-      content_description = content_description.gsub(/\b(?:create|new|add)\s+(?:a\s+)?(?:new\s+)?file\s+[^\s]+\s*(?:that|which|to)?\s*/i, "").strip
+      content_description = content_description.gsub(
+        /\b(?:create|new|add)\s+(?:a\s+)?(?:new\s+)?file\s+[^\s]+\s*(?:that|which|to)?\s*/i, ""
+      ).strip
       # If nothing left, use the full task as description
       content_description = task.to_s if content_description.empty?
 
@@ -1653,15 +1944,18 @@ module Devagent
 
         # Remove markdown code blocks if present
         content = content.gsub(/^```(?:#{language.downcase}|ruby|javascript|typescript|python|java|go|rust|php|markdown|yaml|json|text)?\s*\n/, "")
-                        .gsub(/\n```\s*$/, "")
-                        .strip
+                         .gsub(/\n```\s*$/, "")
+                         .strip
 
         # Ensure content is not empty
         return original_content if content.empty?
 
         content
       rescue StandardError => e
-        context.tracer.event("complete_content_generation_failed", message: e.message, path: file_path) if context.respond_to?(:tracer)
+        if context.respond_to?(:tracer)
+          context.tracer.event("complete_content_generation_failed", message: e.message,
+                                                                     path: file_path)
+        end
         # If generation fails, return original content (no change)
         original_content
       end
@@ -1727,15 +2021,18 @@ module Devagent
 
         # Remove markdown code blocks if present
         content = content.gsub(/^```(?:#{language.downcase}|ruby|javascript|typescript|python|java|go|rust|php|markdown|yaml|json|text)?\s*\n/, "")
-                        .gsub(/\n```\s*$/, "")
-                        .strip
+                         .gsub(/\n```\s*$/, "")
+                         .strip
 
         # Ensure content is not empty
         return generate_fallback_content(file_path, content_description) if content.empty?
 
         content
       rescue StandardError => e
-        context.tracer.event("content_generation_failed", message: e.message, path: file_path) if context.respond_to?(:tracer)
+        if context.respond_to?(:tracer)
+          context.tracer.event("content_generation_failed", message: e.message,
+                                                            path: file_path)
+        end
         # Fallback: generate simple content based on description
         generate_fallback_content(file_path, content_description)
       end
@@ -1860,8 +2157,10 @@ module Devagent
                       # Validate the path is allowed and exists
                       # Check with a test file path since glob patterns like "lib/**" match files, not directories
                       return "" unless Dir.exist?(full_path)
+
                       test_file_path = "#{path}/test.rb"
                       return "" unless context.tool_bus.safety.allowed?(test_file_path)
+
                       full_path
                     else
                       context.repo_path

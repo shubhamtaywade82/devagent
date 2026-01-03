@@ -38,6 +38,12 @@ module Devagent
       Format: --- a/path, +++ b/path, @@ hunk headers. New files: --- /dev/null.
       Minimize diff size, keep formatting.
 
+      CRITICAL: When adding methods, functions, or features to existing files:
+      - PRESERVE all existing content
+      - Only add the new code, don't replace the entire file
+      - Keep all existing methods, classes, and structure intact
+      - Add new code in the appropriate location (e.g., add methods to existing classes)
+
       #{CODING_STANDARDS}
     PROMPT
 
