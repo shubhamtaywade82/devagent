@@ -50,15 +50,22 @@ module Devagent
 
       private
 
-      attr_reader :retrieval_controller
+      attr_reader :retrieval_controller, :repo_path, :context, :planner_model, :preferred_model, :user_prompt, :intent
 
       # Retrieve context files based on intent and repo state
       def retrieve_context(user_prompt, is_empty:, intent:)
         return [] if is_empty
 
+        # First, try to find files by exact name match in common locations
+        # This helps when user mentions a filename like "hello_world.rb"
+        # by searching in playground/, lib/, src/, etc.
+        exact_matches = find_files_by_name(user_prompt)
+
         # If no retrieval controller, fall back to index directly
         if retrieval_controller.nil?
-          return safe_retrieve_from_index(user_prompt)
+          semantic_results = safe_retrieve_from_index(user_prompt)
+          # Combine exact matches with semantic results, prioritizing exact matches
+          return (exact_matches + semantic_results).uniq
         end
 
         # Check if retrieval is mandatory for this intent
@@ -72,7 +79,7 @@ module Devagent
 
         if result[:skip_reason] == :repo_empty
           context.tracer&.event("retrieval_skipped", reason: "repo_empty")
-          return []
+          return exact_matches
         end
 
         if result[:skip_reason] && mandatory
@@ -81,7 +88,9 @@ module Devagent
                                 intent: intent)
         end
 
-        result[:files] || []
+        semantic_files = result[:files] || []
+        # Combine exact matches with semantic results, prioritizing exact matches
+        (exact_matches + semantic_files).uniq
       end
 
       def safe_retrieve_from_index(user_prompt)
@@ -93,7 +102,61 @@ module Devagent
         []
       end
 
-      attr_reader :repo_path, :context, :planner_model, :preferred_model, :user_prompt, :intent
+      # Find files by exact name match in common locations
+      # This helps when user mentions a filename like "hello_world.rb"
+      # by searching in playground/, lib/, src/, etc. (in priority order)
+      def find_files_by_name(user_prompt)
+        # Extract potential filenames from the prompt
+        # Look for patterns like "hello_world.rb", "update hello_world.rb", etc.
+        filename_patterns = [
+          /\b([a-zA-Z0-9_\-.]+\.[a-zA-Z0-9]+)\b/, # filename.ext
+          /\b(?:update|edit|modify|change|read|open|create|add|refactor|improve)\s+([a-zA-Z0-9_\-.]+\.[a-zA-Z0-9]+)\b/i, # action filename.ext
+          /\b([a-zA-Z0-9_\-.]+\.[a-zA-Z0-9]+)\s+(?:to|in|at|from|with|follow|using)\b/i # filename.ext preposition
+        ]
+
+        filenames = []
+        filename_patterns.each do |pattern|
+          matches = user_prompt.scan(pattern)
+          matches.each { |match| filenames << match[0] if match[0] }
+        end
+
+        return [] if filenames.empty?
+
+        # Common locations to search (in priority order)
+        # playground/ is checked first as it's commonly used for test files
+        common_locations = %w[playground lib src app spec test tests]
+
+        found_files = []
+        filenames.each do |filename|
+          # First check if it's already a full path
+          if filename.include?("/")
+            full_path = File.join(repo_path, filename)
+            if File.exist?(full_path) && context.tool_bus.safety.allowed?(filename)
+              found_files << filename
+              next
+            end
+          end
+
+          # Search in common locations (priority order)
+          common_locations.each do |location|
+            test_path = "#{location}/#{filename}"
+            full_path = File.join(repo_path, test_path)
+            if File.exist?(full_path) && context.tool_bus.safety.allowed?(test_path)
+              found_files << test_path
+              break # Found in this location, no need to check others
+            end
+          end
+
+          # Also check root directory
+          root_path = filename
+          full_path = File.join(repo_path, root_path)
+          if File.exist?(full_path) && context.tool_bus.safety.allowed?(root_path) && !found_files.include?(root_path)
+            found_files << root_path
+          end
+        end
+
+        found_files.uniq
+      end
 
       def repo_empty?
         # Check if repo has any code files (excluding .git, node_modules, etc.)
@@ -159,11 +222,12 @@ module Devagent
                                  files_list = retrieved_files.map { |f| "  - #{f}" }.join("\n")
                                  <<~RETRIEVED
 
-                                   RETRIEVED FILES (from semantic search):
+                                   RETRIEVED FILES (from semantic search and file name matching):
                                    #{files_list}
 
-                                   CONSTRAINT: When using fs.read, you SHOULD prefer files from this list unless the user explicitly specified a different path.
-                                   These files are semantically relevant to the task.
+                                   CONSTRAINT: When using fs.read, you MUST use files from this list if they match the user's request.
+                                   Files are searched in priority order: playground/, lib/, src/, app/, spec/, test/, tests/, and root.
+                                   These files are semantically relevant to the task or match the filename mentioned by the user.
                                  RETRIEVED
                                else
                                  ""

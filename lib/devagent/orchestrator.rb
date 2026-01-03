@@ -16,25 +16,19 @@ require_relative "intent_classifier"
 require_relative "diff_generator"
 require_relative "decision_engine"
 require_relative "success_verifier"
-require_relative "retrieval_controller"
 require "shellwords"
 
 module Devagent
   # Orchestrator coordinates planning, execution, and testing loops.
   class Orchestrator
-    attr_reader :context, :planner, :streamer, :ui, :retrieval_controller
+    attr_reader :context, :planner, :streamer, :ui
 
     def initialize(context, output: $stdout, ui: nil)
       @context = context
       @ui = ui || UI::Toolkit.new(output: output)
       @streamer = Streamer.new(context, output: output, ui: @ui)
-      @retrieval_controller = RetrievalController.new(context)
       @planner = Planner.new(context, streamer: @streamer) # Keep old planner as fallback for now
-      @new_planner = Planning::Planner.new(
-        repo_path: context.repo_path,
-        context: context,
-        retrieval_controller: @retrieval_controller
-      )
+      @new_planner = Planning::Planner.new(repo_path: context.repo_path, context: context)
       @executor = Execution::Executor.new(repo_path: context.repo_path, context: context)
     end
 
@@ -124,16 +118,10 @@ module Devagent
             visible_tools = Array(visible_tools).reject { |t| t.respond_to?(:category) && t.category.to_s == "git" }
           end
 
-          # Check for empty repo before planning
-          if retrieval_controller.repo_empty? && state.cycle == 0
-            context.tracer.event("repo_empty_detected")
-            streamer.say("Repository has no indexed files.", level: :warn) unless quiet?
-          end
-
-          # Use new Planning::Planner with hard contract
+            # Use new Planning::Planner with hard contract
           begin
             new_plan = with_spinner("Planning") do
-              @new_planner.call(task, intent: state.intent)
+              @new_planner.call(task)
             end
 
             # Convert Planning::Plan to old Plan struct for compatibility
@@ -310,7 +298,7 @@ module Devagent
         normalized_path = normalize_path_for_validation(path.to_s)
         ensure_read_same_path!(state, normalized_path)
         original = context.tool_bus.read_file("path" => normalized_path).fetch("content")
-        
+
         # If content field is present (from converted fs.create), generate replacement diff
         # Otherwise, use DiffGenerator to generate diff based on goal/reason
         if content && !content.to_s.empty?
@@ -976,10 +964,18 @@ module Devagent
 
       # If path starts with /, try to normalize it (but be conservative)
       if normalized.start_with?("/")
-        # Check if it's clearly a system path - don't normalize these
-        system_paths = %w[/etc /usr /var /tmp /opt /home /root /bin /sbin /lib /sys /proc /dev /mnt /media]
-        return normalized if system_paths.any? { |sys| normalized.start_with?(sys + "/") || normalized == sys }
-
+        # System paths that should never be normalized (always absolute)
+        # These are dangerous system directories that should be rejected by safety layer
+        dangerous_system_paths = %w[/etc /usr /var /tmp /opt /root /bin /sbin /sys /proc /dev /mnt /media /boot /srv]
+        is_dangerous = dangerous_system_paths.any? do |sys|
+          normalized == sys || normalized == sys + "/" || normalized.start_with?(sys + "/")
+        end
+        
+        # Dangerous system paths should not be normalized - they're real system paths
+        # (safety layer will reject them)
+        return normalized if is_dangerous
+        
+        # For other paths starting with / (like /lib/hello.rb), check if they're in the repo
         # Try normalizing: remove leading / and check if it would be inside repo
         test_path = normalized.sub(/\A\//, "")
         test_absolute = File.expand_path(File.join(context.repo_path.to_s, test_path))
@@ -1565,23 +1561,23 @@ module Devagent
       require "diffy"
       diff_text = Diffy::Diff.new(original.to_s, new_content.to_s, context: 3).to_s(:text)
       diff_lines = diff_text.lines
-      
+
       # Count lines for hunk header calculation
       # Count context (unchanged), additions, and deletions
       context_lines = diff_lines.count { |l| l.start_with?(" ") }
       additions = diff_lines.count { |l| l.start_with?("+") && !l.start_with?("+++") }
       deletions = diff_lines.count { |l| l.start_with?("-") && !l.start_with?("---") }
-      
+
       # Calculate hunk header: @@ -start,old_count +start,new_count @@
       # old_count = context + deletions, new_count = context + additions
       old_count = context_lines + deletions
       new_count = context_lines + additions
       start_line = 1
-      
+
       # Build proper unified diff with headers and hunk
       hunk_header = "@@ -#{start_line},#{old_count} +#{start_line},#{new_count} @@\n"
       diff_body = diff_lines.join
-      
+
       <<~DIFF
         --- a/#{path}
         +++ b/#{path}
