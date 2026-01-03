@@ -10,6 +10,7 @@ require "timeout"
 require_relative "safety"
 require_relative "util"
 require_relative "prompts"
+require_relative "ui/prompt"
 
 module Devagent
   # ToolBus executes validated tool actions with safety checks and tracing.
@@ -362,6 +363,13 @@ module Devagent
       end.first || "bundle exec rspec"
     end
 
+    # Check if a command is allowed to run.
+    # Returns true (allowed), false (denied), or prompts user if unknown.
+    #
+    # Flow:
+    #   1. Denylist → Block immediately (dangerous commands)
+    #   2. Allowlist → Allow immediately (known safe commands)
+    #   3. Unknown → Ask user for confirmation
     def command_allowed?(invocation)
       return false unless invocation.is_a?(Array)
 
@@ -369,38 +377,101 @@ module Devagent
       cmd = cmd_str.strip
       return false if cmd.empty?
 
+      # Layer 1: HARD DENYLIST - always blocked, no bypass
       deny_patterns = [
         /\Agit\s+push\b/i,
         /\Agit\s+commit\b/i,
-        /\Agit\s+reset\b/i,
+        /\Agit\s+reset\s+--hard\b/i,
         /\Agit\s+clean\b/i,
-        /\Arm\s+/i,
+        /\Arm\s+-rf?\s/i,
+        /\Arm\s+.*-rf/i,
         /\Asudo\b/i,
         /\bcurl\b.*\|\s*(sh|bash)\b/i,
         /\bwget\b.*\|\s*(sh|bash)\b/i,
-        /\bbundle\s+install\b/i,
-        /\bnpm\s+install\b/i,
-        /\byarn\s+install\b/i
+        /\bchmod\s+777\b/i,
+        /\bchown\b/i,
+        /\bmkfs\b/i,
+        /\bdd\s+if=/i
       ]
-      return false if deny_patterns.any? { |re| cmd.match?(re) }
-
-      allow = Array(context.config.dig("auto", "command_allowlist")).map { |x| x.to_s.strip }.reject(&:empty?)
-      return false if allow.empty? # deny-by-default
+      if deny_patterns.any? { |re| cmd.match?(re) }
+        context.tracer.event("command_denied", command: cmd, reason: "denylist")
+        return false
+      end
 
       tokens = invocation
       prog = tokens.first.to_s
       return false if prog.empty?
 
-      # Primary allowlist: allow only known programs.
-      return false unless allow.include?(prog)
-
-      # Extra guard: disallow launching an interactive shell unless explicitly allowlisted.
+      # Extra guard: disallow launching an interactive shell
       forbidden_shells = %w[bash sh zsh fish].freeze
-      return false if (tokens & forbidden_shells).any? && !allow.any? { |a| forbidden_shells.include?(a) }
+      if forbidden_shells.include?(prog)
+        context.tracer.event("command_denied", command: cmd, reason: "interactive_shell")
+        return false
+      end
 
-      true
+      # Layer 2: ALLOWLIST - known safe commands, run immediately
+      allow = Array(context.config.dig("auto", "command_allowlist")).map { |x| x.to_s.strip }.reject(&:empty?)
+      if allow.include?(prog)
+        context.tracer.event("command_allowed", command: cmd, reason: "allowlist")
+        return true
+      end
+
+      # Layer 2b: SESSION APPROVED - user already approved this program in this session
+      if session_approved?(prog)
+        context.tracer.event("command_allowed", command: cmd, reason: "session_approved")
+        return true
+      end
+
+      # Layer 3: UNKNOWN - ask user for confirmation
+      prompt_user_for_command(cmd)
     rescue ArgumentError
       false
+    end
+
+    # Prompt user to confirm an unknown command.
+    # Returns true if user approves, false otherwise.
+    def prompt_user_for_command(cmd)
+      # Check if confirmation is enabled (default: true for interactive, false for non-interactive)
+      confirmation_enabled = context.config.dig("auto", "confirm_unknown_commands")
+      confirmation_enabled = true if confirmation_enabled.nil? # default to true
+
+      unless confirmation_enabled
+        context.tracer.event("command_denied", command: cmd, reason: "unknown_no_confirmation")
+        return false
+      end
+
+      # Use UI prompt if available
+      ui_prompt = context.respond_to?(:ui) && context.ui.respond_to?(:prompt) ? context.ui.prompt : nil
+      ui_prompt ||= UI::Prompt.new
+
+      approved = ui_prompt.confirm("Run unknown command '#{cmd}'?", default: false)
+
+      if approved
+        context.tracer.event("command_approved_by_user", command: cmd)
+        # Optionally remember this approval for the session
+        remember_approved_command(cmd)
+      else
+        context.tracer.event("command_denied_by_user", command: cmd)
+      end
+
+      approved
+    rescue StandardError => e
+      # If prompting fails (non-interactive), deny by default
+      context.tracer.event("command_denied", command: cmd, reason: "prompt_failed: #{e.message}")
+      false
+    end
+
+    # Remember approved commands for this session to avoid re-prompting
+    def remember_approved_command(cmd)
+      @session_approved_commands ||= []
+      prog = cmd.split.first.to_s
+      @session_approved_commands << prog unless @session_approved_commands.include?(prog)
+    end
+
+    # Check if command was already approved this session
+    def session_approved?(prog)
+      @session_approved_commands ||= []
+      @session_approved_commands.include?(prog)
     end
 
     def validate_diff!(path, diff)
