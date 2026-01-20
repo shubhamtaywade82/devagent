@@ -19,7 +19,8 @@ adapter = ctx.llm_for(:planner)
 prompt = "Respond with a JSON object {\"status\":\"ok\"}."
 
 begin
-  response = adapter.query(prompt, response_format: { type: "json_object" })
+  response_format = ctx.provider_for(:planner) == "openai" ? { type: "json_object" } : nil
+  response = adapter.query(prompt, response_format: response_format)
   puts "LLM response: #{response}"
 rescue Devagent::Error => e
   warn "LLM call failed: #{e.message}"
