@@ -557,7 +557,7 @@ module Devagent
           has_missing_script = error_text.include?("missing script") ||
                                (error_text.include?("npm err") && error_text.include?("missing")) ||
                                (error_text.include?("npm err!") && error_text.include?("missing"))
-          
+
           if has_missing_script
             # Extract script name from error (e.g., "Missing script: lint:fix" or "npm error Missing script: lint")
             script_match = original_stderr.match(/missing script[:\s]+['"]?([^'"]+)['"]?/i) ||
@@ -1363,8 +1363,32 @@ module Devagent
 
         deps = Array(s["depends_on"]).map(&:to_i)
         dep_paths = deps.filter_map { |id| reads[id] }
-        next if dep_paths.include?(normalized_path)
 
+        # If this write step already depends on a read of the same path, we're good
+        if dep_paths.include?(normalized_path)
+          next
+        end
+
+        # Try to auto-fix: find the read step for this path and add it to dependencies
+        read_step_id = reads.find { |_id, path| path == normalized_path }&.first
+
+        if read_step_id
+          # Auto-fix: add the read step to dependencies (preserve existing deps)
+          fixed_deps = (deps + [read_step_id]).uniq
+          s["depends_on"] = fixed_deps
+
+          if context.respond_to?(:tracer)
+            context.tracer.event("fs_write_dependency_auto_fixed",
+                                 write_step_id: s["step_id"],
+                                 write_path: normalized_path,
+                                 original_depends_on: deps,
+                                 fixed_depends_on: fixed_deps,
+                                 read_step_id: read_step_id)
+          end
+          next
+        end
+
+        # No matching read step found - this is a real error
         # Debug: log what we found
         if context.respond_to?(:tracer)
           context.tracer.event("fs_write_dependency_check_failed",
