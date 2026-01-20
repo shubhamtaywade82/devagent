@@ -59,7 +59,7 @@ module Devagent
           original_dev_model = context.config["developer_model"]
           context.config["developer_model"] = executor_model
           # Clear LLM cache for developer role to use new model
-          context.llm_cache.delete(:developer) if context.llm_cache
+          context.llm_cache&.delete(:developer)
           begin
             diff = DiffGenerator.new(context).generate(
               path: path.to_s,
@@ -70,7 +70,7 @@ module Devagent
             )
           ensure
             context.config["developer_model"] = original_dev_model
-            context.llm_cache.delete(:developer) if context.llm_cache
+            context.llm_cache&.delete(:developer)
           end
           context.tool_bus.invoke("type" => "fs.write_diff", "args" => { "path" => path.to_s, "diff" => diff })
         when "fs.delete", "fs_delete"
@@ -99,7 +99,7 @@ module Devagent
           exit_code = result.is_a?(Hash) ? result["exit_code"].to_i : 0
           accepted = Array(step["accepted_exit_codes"] || step[:accepted_exit_codes]).map(&:to_i)
           allow_failure = step["allow_failure"] || step[:allow_failure] == true
-          success = exit_code == 0 || allow_failure || accepted.include?(exit_code)
+          success = exit_code.zero? || allow_failure || accepted.include?(exit_code)
 
           { "success" => success, "artifact" => result }
         when "BOOTSTRAP_REPO"

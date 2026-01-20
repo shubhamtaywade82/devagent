@@ -22,7 +22,10 @@ module Devagent
     end
 
     def decide(plan:, step_results:, observations:)
-      return heuristic(plan: plan, observations: observations) unless context.respond_to?(:query) && context.respond_to?(:provider_for)
+      unless context.respond_to?(:query) && context.respond_to?(:provider_for)
+        return heuristic(plan: plan,
+                         observations: observations)
+      end
 
       prompt = <<~PROMPT
         #{Prompts::DECISION_SYSTEM}
@@ -74,7 +77,8 @@ module Devagent
       end
 
       if Array(plan["success_criteria"]).empty?
-        return { "decision" => "SUCCESS", "reason" => "No success criteria provided; assuming done", "confidence" => 0.55 }
+        return { "decision" => "SUCCESS", "reason" => "No success criteria provided; assuming done",
+                 "confidence" => 0.55 }
       end
 
       if observations.any? { |o| o["type"] == "TEST_RESULT" && o["status"] == "PASS" }
@@ -95,4 +99,3 @@ module Devagent
     end
   end
 end
-

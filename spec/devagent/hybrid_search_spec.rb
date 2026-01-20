@@ -5,6 +5,8 @@ require "fileutils"
 
 RSpec.describe Devagent::HybridSearch do
   let(:repo_path) { Dir.mktmpdir }
+  let(:context) { StubHybridContext.new(repo_path: repo_path) }
+  let(:search) { described_class.new(context) }
   let(:logger_messages) { [] }
 
   class FakeEmbeddingAdapter
@@ -68,9 +70,6 @@ RSpec.describe Devagent::HybridSearch do
       @events << { name: name, data: data }
     end
   end
-
-  let(:context) { StubHybridContext.new(repo_path: repo_path) }
-  let(:search) { described_class.new(context) }
 
   before do
     # Create sample files

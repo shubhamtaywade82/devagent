@@ -47,9 +47,7 @@ module Devagent
       full = File.join(context.repo_path, relative_path)
       context.tracer.event("read_file", path: relative_path)
 
-      unless File.exist?(full)
-        return { "path" => relative_path, "content" => "" }
-      end
+      return { "path" => relative_path, "content" => "" } unless File.exist?(full)
 
       # Get file size and check if we should read in chunks
       file_size = File.size(full)
@@ -166,7 +164,7 @@ module Devagent
       # We intentionally use git apply because it is the most reliable diff applier
       # for unified diffs and keeps behavior deterministic.
       stderr_output = ""
-      IO.popen(["git", "-C", context.repo_path, "apply", "--whitespace=nowarn", "-"], "w+", err: [:child, :out]) do |io|
+      IO.popen(["git", "-C", context.repo_path, "apply", "--whitespace=nowarn", "-"], "w+", err: %i[child out]) do |io|
         io.write(diff)
         io.close_write
         stderr_output = io.read
@@ -174,8 +172,11 @@ module Devagent
 
       unless $CHILD_STATUS&.success?
         # Log the diff and error for debugging
-        context.tracer.event("diff_apply_failed", path: relative_path, error: stderr_output, diff_preview: diff.lines.first(10).join) if context.respond_to?(:tracer)
-        raise Error, "diff apply failed: #{stderr_output.strip.empty? ? 'unknown error' : stderr_output.strip}"
+        if context.respond_to?(:tracer)
+          context.tracer.event("diff_apply_failed", path: relative_path, error: stderr_output,
+                                                    diff_preview: diff.lines.first(10).join)
+        end
+        raise Error, "diff apply failed: #{stderr_output.strip.empty? ? "unknown error" : stderr_output.strip}"
       end
 
       @changes_made = true
@@ -220,7 +221,7 @@ module Devagent
       end
 
       # For other non-zero exit codes, raise error
-      raise Error, "Command failed (#{command}):\nSTDOUT: #{stdout}\nSTDERR: #{result["stderr"]}" unless exit_code == 0
+      raise Error, "Command failed (#{command}):\nSTDOUT: #{stdout}\nSTDERR: #{result["stderr"]}" unless exit_code.zero?
 
       :ok
     end
@@ -396,7 +397,7 @@ module Devagent
 
       # Extra guard: disallow launching an interactive shell unless explicitly allowlisted.
       forbidden_shells = %w[bash sh zsh fish].freeze
-      return false if (tokens & forbidden_shells).any? && !allow.any? { |a| forbidden_shells.include?(a) }
+      return false if tokens.intersect?(forbidden_shells) && allow.none? { |a| forbidden_shells.include?(a) }
 
       true
     rescue ArgumentError

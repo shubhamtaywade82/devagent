@@ -7,7 +7,7 @@ RSpec.describe Devagent::Context do
   let(:repo) { Dir.mktmpdir }
 
   around do |example|
-    original_key = ENV["OPENAI_API_KEY"]
+    original_key = ENV.fetch("OPENAI_API_KEY", nil)
     ENV.delete("OPENAI_API_KEY")
 
     example.run

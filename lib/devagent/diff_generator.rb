@@ -96,10 +96,10 @@ module Devagent
           # Has file headers but missing hunk - try to add hunk header after the file headers
           lines = diff.lines
           file_header_end = lines.index { |l| l.start_with?("+++") } || 0
-          if file_header_end > 0
+          if file_header_end.positive?
             # Insert hunk header after file headers
             hunk_header = "@@ -1,1 +1,2 @@"
-            lines.insert(file_header_end + 1, hunk_header + "\n")
+            lines.insert(file_header_end + 1, "#{hunk_header}\n")
             diff = lines.join
           end
         else

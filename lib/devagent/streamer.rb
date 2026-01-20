@@ -7,8 +7,8 @@ module Devagent
       @context = context
       @ui = ui
       @output = ui ? ui.output : output
-      @markdown_renderer = ui&.respond_to?(:markdown_renderer) ? ui.markdown_renderer : nil
-      @colorizer = ui&.respond_to?(:colorizer) ? ui.colorizer : nil
+      @markdown_renderer = ui.respond_to?(:markdown_renderer) ? ui.markdown_renderer : nil
+      @colorizer = ui.respond_to?(:colorizer) ? ui.colorizer : nil
     end
 
     def say(message, level: :info, markdown: false)

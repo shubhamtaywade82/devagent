@@ -78,7 +78,7 @@ module Devagent
           "require_tests_green" => true,
           "dry_run" => false,
           # Allowlist is by program name (first token), not a string prefix.
-          "command_allowlist" => ["bundle", "ruby", "npm", "yarn", "rubocop", "rake", "make", "git"],
+          "command_allowlist" => %w[bundle ruby npm yarn rubocop rake make git],
           "command_timeout_seconds" => 60,
           "command_max_output_bytes" => 20_000,
           "max_file_size_bytes" => 100_000, # Files larger than this will be read in chunks (100KB)
@@ -94,9 +94,7 @@ module Devagent
     end
 
     def self.stringify_keys(hash)
-      hash.each_with_object({}) do |(key, value), memo|
-        memo[key.to_s] = value
-      end
+      hash.transform_keys(&:to_s)
     end
 
     def self.deep_merge(base, overrides)
@@ -180,7 +178,7 @@ module Devagent
     def openai_api_key
       openai = config["openai"] || {}
       env_key = openai["api_key_env"] || "OPENAI_API_KEY"
-      key = ENV[env_key]
+      key = ENV.fetch(env_key, nil)
       key = config.dig("openai", "api_key") if key.to_s.empty?
       key = "ollama" if key.to_s.empty? && !openai_uri_base.match?(/api\.openai\.com/i)
       key
@@ -253,7 +251,7 @@ module Devagent
     end
 
     def symbolize_keys(hash)
-      hash.each_with_object({}) { |(key, value), memo| memo[key.to_sym] = value }
+      hash.transform_keys(&:to_sym)
     end
   end
 

@@ -41,7 +41,8 @@ RSpec.describe Devagent::Orchestrator do
     state = Devagent::AgentState.initial(goal: "t")
     plan = build_plan(
       steps: [
-        { "step_id" => 1, "action" => "fs.read", "path" => "spec/definitely_missing___123.rb", "reason" => "read", "depends_on" => [] }
+        { "step_id" => 1, "action" => "fs.read", "path" => "spec/definitely_missing___123.rb", "reason" => "read",
+          "depends_on" => [] }
       ]
     )
 
@@ -49,14 +50,16 @@ RSpec.describe Devagent::Orchestrator do
       orchestrator.send(:validate_plan!, state, plan, visible_tools: visible_tools)
     end.to raise_error(Devagent::Error, /fs\.read on non-existent file/i)
 
-    expect(state.observations).to include(hash_including("type" => "FILE_MISSING", "path" => "spec/definitely_missing___123.rb"))
+    expect(state.observations).to include(hash_including("type" => "FILE_MISSING",
+                                                         "path" => "spec/definitely_missing___123.rb"))
   end
 
   it "rejects fs.write on a non-existent file (must use fs.create)" do
     state = Devagent::AgentState.initial(goal: "t")
     plan = build_plan(
       steps: [
-        { "step_id" => 1, "action" => "fs.write", "path" => "spec/definitely_missing___456.rb", "reason" => "write", "depends_on" => [] }
+        { "step_id" => 1, "action" => "fs.write", "path" => "spec/definitely_missing___456.rb", "reason" => "write",
+          "depends_on" => [] }
       ]
     )
 
@@ -69,7 +72,8 @@ RSpec.describe Devagent::Orchestrator do
     state = Devagent::AgentState.initial(goal: "t")
     plan = build_plan(
       steps: [
-        { "step_id" => 1, "action" => "fs.create", "path" => "spec/definitely_missing___789.rb", "content" => "puts 'hi'\n", "reason" => "create", "depends_on" => [] }
+        { "step_id" => 1, "action" => "fs.create", "path" => "spec/definitely_missing___789.rb",
+          "content" => "puts 'hi'\n", "reason" => "create", "depends_on" => [] }
       ]
     )
 
@@ -82,7 +86,8 @@ RSpec.describe Devagent::Orchestrator do
     state = Devagent::AgentState.initial(goal: "t")
     plan = build_plan(
       steps: [
-        { "step_id" => 1, "action" => "fs.read", "path" => "lib/devagent/version.rb", "reason" => "read", "depends_on" => [] }
+        { "step_id" => 1, "action" => "fs.read", "path" => "lib/devagent/version.rb", "reason" => "read",
+          "depends_on" => [] }
       ]
     )
 
@@ -97,8 +102,10 @@ RSpec.describe Devagent::Orchestrator do
     plan = build_plan(
       confidence: 0.4,
       steps: [
-        { "step_id" => 1, "action" => "fs.read", "path" => "lib/devagent/version.rb", "reason" => "read", "depends_on" => [] },
-        { "step_id" => 2, "action" => "fs.write", "path" => "lib/devagent/version.rb", "reason" => "write", "depends_on" => [1] }
+        { "step_id" => 1, "action" => "fs.read", "path" => "lib/devagent/version.rb", "reason" => "read",
+          "depends_on" => [] },
+        { "step_id" => 2, "action" => "fs.write", "path" => "lib/devagent/version.rb", "reason" => "write",
+          "depends_on" => [1] }
       ]
     )
 
@@ -112,7 +119,8 @@ RSpec.describe Devagent::Orchestrator do
     plan = build_plan(
       confidence: 0.3,
       steps: [
-        { "step_id" => 1, "action" => "fs.read", "path" => "lib/devagent/version.rb", "reason" => "read", "depends_on" => [] }
+        { "step_id" => 1, "action" => "fs.read", "path" => "lib/devagent/version.rb", "reason" => "read",
+          "depends_on" => [] }
       ]
     )
 
@@ -125,7 +133,8 @@ RSpec.describe Devagent::Orchestrator do
     state = Devagent::AgentState.initial(goal: "t")
     plan = build_plan(
       steps: [
-        { "step_id" => 1, "action" => "fs.nope", "path" => nil, "command" => nil, "reason" => "nope", "depends_on" => [] }
+        { "step_id" => 1, "action" => "fs.nope", "path" => nil, "command" => nil, "reason" => "nope",
+          "depends_on" => [] }
       ]
     )
 
@@ -138,8 +147,10 @@ RSpec.describe Devagent::Orchestrator do
     state = Devagent::AgentState.initial(goal: "t")
     plan = build_plan(
       steps: [
-        { "step_id" => 1, "action" => "fs.read", "path" => "lib/devagent/version.rb", "reason" => "read", "depends_on" => [] },
-        { "step_id" => 2, "action" => "fs.read", "path" => "lib/devagent/version.rb", "reason" => "read again", "depends_on" => [] }
+        { "step_id" => 1, "action" => "fs.read", "path" => "lib/devagent/version.rb", "reason" => "read",
+          "depends_on" => [] },
+        { "step_id" => 2, "action" => "fs.read", "path" => "lib/devagent/version.rb", "reason" => "read again",
+          "depends_on" => [] }
       ]
     )
 
@@ -152,7 +163,8 @@ RSpec.describe Devagent::Orchestrator do
     state = Devagent::AgentState.initial(goal: "t")
     plan = build_plan(
       steps: [
-        { "step_id" => 1, "action" => "fs.create", "path" => "lib/devagent/version.rb", "content" => "x", "reason" => "create", "depends_on" => [] }
+        { "step_id" => 1, "action" => "fs.create", "path" => "lib/devagent/version.rb", "content" => "x",
+          "reason" => "create", "depends_on" => [] }
       ]
     )
     # Ensure File.exist? returns true for this test (file already exists)
@@ -167,8 +179,10 @@ RSpec.describe Devagent::Orchestrator do
     state = Devagent::AgentState.initial(goal: "t")
     plan = build_plan(
       steps: [
-        { "step_id" => 1, "action" => "fs.read", "path" => "lib/devagent/version.rb", "reason" => "read", "depends_on" => [] },
-        { "step_id" => 2, "action" => "fs.write", "path" => "lib/devagent/version.rb", "reason" => "write", "depends_on" => [] }
+        { "step_id" => 1, "action" => "fs.read", "path" => "lib/devagent/version.rb", "reason" => "read",
+          "depends_on" => [] },
+        { "step_id" => 2, "action" => "fs.write", "path" => "lib/devagent/version.rb", "reason" => "write",
+          "depends_on" => [] }
       ]
     )
 
@@ -179,4 +193,3 @@ RSpec.describe Devagent::Orchestrator do
     expect(state.plan_fingerprints).to be_empty
   end
 end
-

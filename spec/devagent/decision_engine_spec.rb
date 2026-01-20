@@ -1,9 +1,8 @@
 # frozen_string_literal: true
 
 RSpec.describe Devagent::DecisionEngine do
-  let(:context) { instance_double(Devagent::Context) } # no query/provider_for => heuristic path
-
   subject(:engine) { described_class.new(context) }
+  let(:context) { instance_double(Devagent::Context) } # no query/provider_for => heuristic path
 
   it "retries when tests fail" do
     decision = engine.decide(
@@ -68,4 +67,3 @@ RSpec.describe Devagent::DecisionEngine do
     expect(decision).to include("decision" => "SUCCESS")
   end
 end
-

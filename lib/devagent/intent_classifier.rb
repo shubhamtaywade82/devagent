@@ -74,14 +74,19 @@ module Devagent
       return { "intent" => "REJECT", "confidence" => 0.9 } if text.empty?
 
       explanation_starts = %w[what who when where why how explain describe summarize]
-      code_action = %w[add create update implement refactor fix write generate run install build change edit remove delete]
+      code_action = %w[add create update implement refactor fix write generate run install build change edit remove
+                       delete]
       debug_words = %w[error exception failing failed stacktrace stack trace bug]
       review_words = %w[review critique audit assess]
 
       return { "intent" => "DEBUG", "confidence" => 0.7 } if debug_words.any? { |w| text.include?(w) }
       return { "intent" => "CODE_REVIEW", "confidence" => 0.7 } if review_words.any? { |w| text.include?(w) }
-      return { "intent" => "CODE_EDIT", "confidence" => 0.75 } if code_action.any? { |w| text.start_with?(w) || text.include?(" #{w} ") }
-      return { "intent" => "EXPLANATION", "confidence" => 0.7 } if text.end_with?("?") || explanation_starts.any? { |w| text.start_with?("#{w} ") }
+      return { "intent" => "CODE_EDIT", "confidence" => 0.75 } if code_action.any? do |w|
+        text.start_with?(w) || text.include?(" #{w} ")
+      end
+      return { "intent" => "EXPLANATION", "confidence" => 0.7 } if text.end_with?("?") || explanation_starts.any? do |w|
+        text.start_with?("#{w} ")
+      end
 
       { "intent" => "GENERAL", "confidence" => 0.55 }
     end
@@ -97,4 +102,3 @@ module Devagent
     end
   end
 end
-

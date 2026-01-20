@@ -88,10 +88,8 @@ module Devagent
 
     # Extract searchable patterns from query
     def extract_patterns(query)
-      patterns = []
-
       # Extract quoted strings
-      query.scan(/"([^"]+)"/).each { |m| patterns << m[0] }
+      patterns = query.scan(/"([^"]+)"/).map { |m| m[0] }
       query.scan(/'([^']+)'/).each { |m| patterns << m[0] }
 
       # Extract CamelCase class/module names
@@ -107,7 +105,7 @@ module Devagent
       end
 
       # Extract file paths
-      query.scan(/\b([a-zA-Z0-9_\-\/]+\.[a-z]{1,4})\b/).each { |m| patterns << m[0] }
+      query.scan(%r{\b([a-zA-Z0-9_\-/]+\.[a-z]{1,4})\b}).each { |m| patterns << m[0] }
 
       patterns.uniq
     end
@@ -162,9 +160,7 @@ module Devagent
       # Add grep results first (higher priority)
       grep_results.each do |result|
         key = result[:path]
-        if results_map[key].nil? || results_map[key][:score] < result[:score]
-          results_map[key] = result
-        end
+        results_map[key] = result if results_map[key].nil? || results_map[key][:score] < result[:score]
       end
 
       # Add embedding results, boosting score if also in grep results
@@ -173,7 +169,7 @@ module Devagent
         if results_map[key]
           # File was also found by grep - boost its score
           results_map[key][:score] += result[:score] * 0.5
-          results_map[key][:sources] = [:grep, :embedding]
+          results_map[key][:sources] = %i[grep embedding]
         else
           results_map[key] = result
           results_map[key][:sources] = [:embedding]

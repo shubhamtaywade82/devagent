@@ -7,4 +7,3 @@ RSpec.describe Devagent::Ollama::Client do
     expect(http.read_timeout).to eq(12)
   end
 end
-

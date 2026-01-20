@@ -6,7 +6,7 @@ RSpec.describe Devagent::Planner do
   let(:tokens) { [] }
   let(:streamer) do
     instance_double(Devagent::Streamer).tap do |dbl|
-      allow(dbl).to receive(:with_stream) do |role, &block|
+      allow(dbl).to receive(:with_stream) do |_role, &block|
         block.call(->(token) { tokens << token })
         plan_json
       end
@@ -40,8 +40,10 @@ RSpec.describe Devagent::Planner do
       "goal" => "Ship feature",
       "assumptions" => ["Repo is writable"],
       "steps" => [
-        { "step_id" => 1, "action" => "fs.read", "path" => "README.md", "command" => nil, "content" => nil, "reason" => "Inspect existing docs", "depends_on" => [0] },
-        { "step_id" => 2, "action" => "fs.write", "path" => "README.md", "command" => nil, "content" => nil, "reason" => "Update docs", "depends_on" => [1] }
+        { "step_id" => 1, "action" => "fs.read", "path" => "README.md", "command" => nil, "content" => nil,
+          "reason" => "Inspect existing docs", "depends_on" => [0] },
+        { "step_id" => 2, "action" => "fs.write", "path" => "README.md", "command" => nil, "content" => nil,
+          "reason" => "Update docs", "depends_on" => [1] }
       ],
       "success_criteria" => ["README updated"],
       "rollback_strategy" => "Revert the README changes",
@@ -58,7 +60,7 @@ RSpec.describe Devagent::Planner do
     allow(context).to receive(:provider_for).with(:reviewer).and_return("openai")
     allow(context).to receive(:provider_for).with(:embedding).and_return("openai")
     allow(context).to receive(:provider_for).and_return("openai")
-    allow(context).to receive(:query) do |role:, **kwargs, &block|
+    allow(context).to receive(:query) do |role:, **_kwargs, &block|
       if role == :planner
         %w[{ plan }].each { |token| block&.call(token) }
         plan_json
@@ -81,7 +83,7 @@ RSpec.describe Devagent::Planner do
 
   it "replans once when reviewer finds issues" do
     attempts = 0
-    allow(context).to receive(:query) do |role:, **kwargs, &block|
+    allow(context).to receive(:query) do |role:, **_kwargs, &block|
       if role == :planner
         attempts += 1
         %w[{ plan }].each { |token| block&.call(token) }

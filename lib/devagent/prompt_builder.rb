@@ -67,7 +67,12 @@ module Devagent
                     end
 
       tool_contracts = tool_values.map do |tool|
-        tool.respond_to?(:to_contract_hash) ? tool.to_contract_hash : { "name" => tool.name, "description" => tool.description }
+        if tool.respond_to?(:to_contract_hash)
+          tool.to_contract_hash
+        else
+          { "name" => tool.name,
+            "description" => tool.description }
+        end
       end
 
       @sections[:tools] = JSON.pretty_generate(tool_contracts)

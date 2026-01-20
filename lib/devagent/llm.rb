@@ -97,9 +97,7 @@ module Devagent
     end
 
     def symbolize_keys(hash)
-      hash.to_h.each_with_object({}) do |(key, value), memo|
-        memo[key.to_sym] = value
-      end
+      hash.to_h.transform_keys(&:to_sym)
     end
   end
 end

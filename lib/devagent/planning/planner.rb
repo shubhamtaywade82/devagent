@@ -200,7 +200,7 @@ module Devagent
         # Try preferred model first
         context.config["planner_model"] = preferred_model
         # Clear LLM cache to force new model
-        context.llm_cache.delete(:planner) if context.llm_cache
+        context.llm_cache&.delete(:planner)
 
         begin
           context.query(
@@ -214,7 +214,7 @@ module Devagent
           raise unless preferred_model != planner_model
 
           context.config["planner_model"] = planner_model
-          context.llm_cache.delete(:planner) if context.llm_cache
+          context.llm_cache&.delete(:planner)
           context.query(
             role: :planner,
             prompt: prompt,
@@ -224,7 +224,7 @@ module Devagent
         ensure
           # Restore original model
           context.config["planner_model"] = original_planner_model
-          context.llm_cache.delete(:planner) if context.llm_cache
+          context.llm_cache&.delete(:planner)
         end
       end
 

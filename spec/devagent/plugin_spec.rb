@@ -10,4 +10,3 @@ RSpec.describe Devagent::Plugin do
     expect(described_class.test_command(nil)).to be_nil
   end
 end
-

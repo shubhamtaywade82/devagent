@@ -86,15 +86,15 @@ module Devagent
 
       def call_with_retry(base_payload)
         yield(base_payload)
-      rescue StandardError => error
-        raise error unless retry_without_extra_body?(base_payload, error)
+      rescue StandardError => e
+        raise e unless retry_without_extra_body?(base_payload, e)
 
         stripped = base_payload.dup
         stripped.delete(:extra_body)
         begin
           yield(stripped)
         rescue StandardError
-          raise error
+          raise e
         end
       end
 
@@ -104,7 +104,11 @@ module Devagent
         status = if error.respond_to?(:status_code)
                    error.status_code
                  elsif error.respond_to?(:response)
-                   error.response[:status] rescue nil
+                   begin
+                     error.response[:status]
+                   rescue StandardError
+                     nil
+                   end
                  end
         status = status.to_i
         return true if status >= 500 && status < 600
@@ -114,9 +118,7 @@ module Devagent
       end
 
       def symbolize_keys(hash)
-        hash.to_h.each_with_object({}) do |(key, value), memo|
-          memo[key.to_sym] = value
-        end
+        hash.to_h.transform_keys(&:to_sym)
       end
     end
   end

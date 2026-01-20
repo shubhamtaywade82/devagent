@@ -137,9 +137,9 @@ module Devagent
       say("Embedding Index Status", :green)
       say("-" * 40)
       say("  Document count    : #{status[:document_count]}")
-      say("  Repository empty  : #{status[:repo_empty] ? 'Yes' : 'No'}")
-      say("  Embeddings ready  : #{status[:embeddings_ready] ? 'Yes' : 'No'}")
-      say("  Embeddings stale  : #{status[:embeddings_stale] ? 'Yes (rebuild recommended)' : 'No'}")
+      say("  Repository empty  : #{status[:repo_empty] ? "Yes" : "No"}")
+      say("  Embeddings ready  : #{status[:embeddings_ready] ? "Yes" : "No"}")
+      say("  Embeddings stale  : #{status[:embeddings_stale] ? "Yes (rebuild recommended)" : "No"}")
       say("")
       say("Backend:", :cyan)
       say("  Provider          : #{status[:backend]["provider"]}")
@@ -149,7 +149,7 @@ module Devagent
       if status[:metadata].any?
         say("Metadata:", :cyan)
         say("  Dimension         : #{status[:metadata]["dim"]}")
-        say("  Indexed at        : #{status[:metadata]["indexed_at"] || 'unknown'}")
+        say("  Indexed at        : #{status[:metadata]["indexed_at"] || "unknown"}")
         say("  Stored provider   : #{status[:metadata]["provider"]}")
         say("  Stored model      : #{status[:metadata]["model"]}")
       else
@@ -158,17 +158,17 @@ module Devagent
 
       # Check for stale files
       stale_count = ctx.index.stale_files.size
-      if stale_count > 0
-        say("")
-        say("Stale files: #{stale_count} (run 'devagent index build' to update)", :yellow)
-      end
+      return unless stale_count.positive?
+
+      say("")
+      say("Stale files: #{stale_count} (run 'devagent index build' to update)", :yellow)
     end
 
     def index_build(ctx)
       say("Building embedding index (incremental)...", :cyan)
       stale_before = ctx.index.stale_files.size
 
-      if stale_before == 0 && ctx.index.document_count > 0
+      if stale_before.zero? && ctx.index.document_count.positive?
         say("Index is up to date. No changes needed.", :green)
         return
       end

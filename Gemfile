@@ -10,11 +10,11 @@ gem "rake", "~> 13.0"
 
 gem "rspec", "~> 3.0"
 
+gem "bigdecimal"
 gem "rubocop", "~> 1.21"
 gem "rubocop-performance"
 gem "rubocop-rake"
 gem "rubocop-rspec"
-gem "bigdecimal"
 
 group :test do
   gem "simplecov", "~> 0.22", require: false

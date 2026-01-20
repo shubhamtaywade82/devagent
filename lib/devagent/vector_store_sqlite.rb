@@ -70,15 +70,15 @@ module Devagent
     end
 
     def load_entries!
-      if @db
-        rows = @db.execute("SELECT key, embedding, metadata FROM embeddings")
-        @entries = rows.map do |key, embedding_json, metadata_json|
-          Entry.new(
-            key: key,
-            embedding: JSON.parse(embedding_json),
-            metadata: JSON.parse(metadata_json)
-          )
-        end
+      return unless @db
+
+      rows = @db.execute("SELECT key, embedding, metadata FROM embeddings")
+      @entries = rows.map do |key, embedding_json, metadata_json|
+        Entry.new(
+          key: key,
+          embedding: JSON.parse(embedding_json),
+          metadata: JSON.parse(metadata_json)
+        )
       end
     end
 

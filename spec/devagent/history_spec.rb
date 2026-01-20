@@ -36,4 +36,3 @@ RSpec.describe Devagent::History do
     end
   end
 end
-

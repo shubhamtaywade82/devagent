@@ -64,16 +64,15 @@ RSpec.describe Devagent::ToolRegistry do
 
   describe "#validate!" do
     it "validates inputs schema for fs.read" do
-      expect {
+      expect do
         registry.validate!("fs.read", {})
-      }.to raise_error(JSON::Schema::ValidationError)
+      end.to raise_error(JSON::Schema::ValidationError)
     end
 
     it "raises on unknown tool" do
-      expect {
+      expect do
         registry.validate!("nope.tool", {})
-      }.to raise_error(Devagent::Error, /Unknown tool/)
+      end.to raise_error(Devagent::Error, /Unknown tool/)
     end
   end
 end
-

@@ -64,7 +64,7 @@ module Devagent
     end
 
     def log(level, message)
-      if ui&.respond_to?(:logger)
+      if ui.respond_to?(:logger)
         ui.logger.public_send(level, message)
       else
         output.puts(message)

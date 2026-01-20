@@ -45,11 +45,11 @@ module Devagent
         end
 
         # Record observations fingerprint
-        if observations
-          obs_fp = fingerprint(observations.to_s)
-          @observations_hash_history << obs_fp
-          @observations_hash_history = @observations_hash_history.last(MAX_HISTORY)
-        end
+        return unless observations
+
+        obs_fp = fingerprint(observations.to_s)
+        @observations_hash_history << obs_fp
+        @observations_hash_history = @observations_hash_history.last(MAX_HISTORY)
       end
 
       # Check if we're stagnant (no progress being made).
@@ -60,19 +60,13 @@ module Devagent
         return { stagnant: false, reason: "Insufficient history" } if @diff_history.size < 2
 
         # Check for repeated identical diffs
-        if same_diff_repeated?
-          return { stagnant: true, reason: "Same diff repeated" }
-        end
+        return { stagnant: true, reason: "Same diff repeated" } if same_diff_repeated?
 
         # Check for repeated identical plans
-        if same_plan_repeated?
-          return { stagnant: true, reason: "Same plan repeated" }
-        end
+        return { stagnant: true, reason: "Same plan repeated" } if same_plan_repeated?
 
         # Check for repeated identical observation patterns
-        if same_observations_repeated?
-          return { stagnant: true, reason: "Same observation pattern repeated" }
-        end
+        return { stagnant: true, reason: "Same observation pattern repeated" } if same_observations_repeated?
 
         { stagnant: false, reason: "Making progress" }
       end

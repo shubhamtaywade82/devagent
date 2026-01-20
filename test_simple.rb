@@ -129,10 +129,10 @@ class SimpleDevAgentTest
 
       # Test file writing
       test_content = "# Test file created by DevAgent\necho 'Hello from DevAgent!'"
-      result = tool_bus.write_file({
-                                     "path" => "test_output.rb",
-                                     "content" => test_content
-                                   })
+      tool_bus.write_file({
+                            "path" => "test_output.rb",
+                            "content" => test_content
+                          })
 
       # Verify file was created
       if File.exist?("test_output.rb") && File.read("test_output.rb") == test_content
@@ -162,14 +162,14 @@ class SimpleDevAgentTest
       spinner.run { "UI test completed" }
 
       # Test table
-      table = ui.table(
+      ui.table(
         header: %w[Component Status],
         rows: [["UI Toolkit", "Working"], ["Spinner", "Working"], ["Table", "Working"]]
       )
 
       # Test colorizer
       colorizer = ui.colorizer
-      colored_text = colorizer.colorize(:success, "Success!")
+      colorizer.colorize(:success, "Success!")
 
       @results[:ui_components] = { status: "PASS" }
       puts "✅ UI components working correctly"
@@ -207,7 +207,7 @@ class SimpleDevAgentTest
   end
 
   def display_results
-    puts "\n" + ("=" * 40)
+    puts "\n#{"=" * 40}"
     puts "📊 TEST RESULTS SUMMARY"
     puts "=" * 40
 
@@ -247,7 +247,7 @@ class SimpleDevAgentTest
 end
 
 # Run the tests
-if __FILE__ == $0
+if __FILE__ == $PROGRAM_NAME
   test = SimpleDevAgentTest.new
   test.run_all_tests
 end

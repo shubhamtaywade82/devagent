@@ -14,7 +14,7 @@ module Devagent
 
       def render
         table = TTY::Table.new(header: header, rows: rows)
-        output.puts(table.render(:unicode, alignments: [:left, :left]))
+        output.puts(table.render(:unicode, alignments: %i[left left]))
       end
 
       private

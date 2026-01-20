@@ -71,7 +71,7 @@ module Devagent
 
         # Look for success after this failure
         state.observations[failure_index..].any? do |obs|
-          obs["status"] == "OK" || obs["status"] == "PASS"
+          %w[OK PASS].include?(obs["status"])
         end
       end
 
@@ -99,7 +99,7 @@ module Devagent
       # Check if files were modified
       def files_modified?
         return true if state.artifacts[:files_written].any?
-        return true if state.artifacts[:patches_applied].to_i > 0
+        return true if state.artifacts[:patches_applied].to_i.positive?
 
         false
       end

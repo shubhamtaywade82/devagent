@@ -1,9 +1,8 @@
 # frozen_string_literal: true
 
 RSpec.describe Devagent::IntentClassifier do
-  let(:context) { instance_double(Devagent::Context) } # no query/provider_for => heuristic path
-
   subject(:classifier) { described_class.new(context) }
+  let(:context) { instance_double(Devagent::Context) } # no query/provider_for => heuristic path
 
   it "returns REJECT for empty input" do
     expect(classifier.classify("")).to include("intent" => "REJECT")
@@ -29,4 +28,3 @@ RSpec.describe Devagent::IntentClassifier do
     expect(classifier.classify("hello there")).to include("intent" => "GENERAL")
   end
 end
-

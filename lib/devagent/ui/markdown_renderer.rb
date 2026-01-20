@@ -10,7 +10,7 @@ module Devagent
     class MarkdownRenderer
       def initialize(output: $stdout, width: nil)
         @output = output
-        @width = width || TTY::Screen.width - 4
+        @width = width || (TTY::Screen.width - 4)
         @cursor = TTY::Cursor
       end
 
@@ -24,7 +24,7 @@ module Devagent
         output.print(render_markdown(buffer))
         output.print(cursor.show)
         output.flush
-      rescue StandardError => e
+      rescue StandardError
         # Fallback to plain text if markdown rendering fails
         output.print(cursor.show)
         output.print(buffer)

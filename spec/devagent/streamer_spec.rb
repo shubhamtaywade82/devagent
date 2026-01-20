@@ -3,6 +3,8 @@
 require "stringio"
 
 RSpec.describe Devagent::Streamer do
+  subject(:streamer) { described_class.new(context, output: output) }
+
   let(:output) { StringIO.new }
   let(:session_memory) { instance_double(Devagent::SessionMemory, append: nil, last_turns: []) }
   let(:tracer) { instance_double(Devagent::Tracer, event: nil) }
@@ -13,8 +15,6 @@ RSpec.describe Devagent::Streamer do
       tracer: tracer
     )
   end
-
-  subject(:streamer) { described_class.new(context, output: output) }
 
   describe "#with_stream" do
     it "buffers tokens and appends them to session memory" do

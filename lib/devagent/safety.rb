@@ -39,7 +39,7 @@ module Devagent
       # Additional check: block if path resolves to a dangerous system location
       # even if it started with ../
       dangerous_system_dirs = %w[/etc /usr /var /tmp /opt /root /bin /sbin /lib /sys /proc /dev /mnt /media /boot /srv]
-      return false if dangerous_system_dirs.any? { |dir| absolute.start_with?(dir + "/") || absolute == dir }
+      return false if dangerous_system_dirs.any? { |dir| absolute.start_with?("#{dir}/") || absolute == dir }
 
       # For paths inside repo, check allowlist/denylist
       # For paths outside repo, allow by default (only system paths are blocked above)
@@ -59,7 +59,7 @@ module Devagent
       return path if path.empty?
 
       # Remove ./ prefix (common relative path notation)
-      path = path.sub(%r{\A\./}, "")
+      path = path.delete_prefix("./")
 
       # If path starts with /, it might be:
       # 1. An absolute system path (should be rejected)
@@ -68,10 +68,10 @@ module Devagent
       if path.start_with?("/")
         # Check if it's clearly a system path - reject these
         system_paths = %w[/etc /usr /var /tmp /opt /home /root /bin /sbin /lib /sys /proc /dev /mnt /media]
-        return path if system_paths.any? { |sys| path.start_with?(sys + "/") || path == sys }
+        return path if system_paths.any? { |sys| path.start_with?("#{sys}/") || path == sys }
 
         # Try normalizing: remove leading / and check if it would be inside repo
-        test_path = path.sub(%r{\A/}, "")
+        test_path = path.delete_prefix("/")
         test_absolute = absolute_path(test_path)
         repo_root = File.expand_path(@repo)
         # Only normalize if the test path would be inside the repo

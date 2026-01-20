@@ -4,6 +4,8 @@ require "tmpdir"
 require "fileutils"
 
 RSpec.describe Devagent::ToolBus do
+  subject(:tool_bus) { described_class.new(context, registry: registry) }
+
   let(:repo) { Dir.mktmpdir }
   let(:config) do
     {
@@ -26,8 +28,6 @@ RSpec.describe Devagent::ToolBus do
     )
   end
   let(:registry) { Devagent::ToolRegistry.default }
-
-  subject(:tool_bus) { described_class.new(context, registry: registry) }
 
   after do
     FileUtils.remove_entry(repo)
@@ -59,4 +59,3 @@ RSpec.describe Devagent::ToolBus do
     expect(diff["stdout"]).to include("--- a/a.txt").and include("+++ b/a.txt")
   end
 end
-

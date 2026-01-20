@@ -59,4 +59,3 @@ RSpec.describe Devagent::Config do
     end
   end
 end
-

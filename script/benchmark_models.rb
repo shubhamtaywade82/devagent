@@ -29,7 +29,7 @@ def get_models_to_benchmark(ollama_host)
     res = Net::HTTP.get_response(tags_uri)
     if res.is_a?(Net::HTTPSuccess)
       data = JSON.parse(res.body)
-      models = Array(data["models"]).map { |m| m["name"] }.compact
+      models = Array(data["models"]).filter_map { |m| m["name"] }
       # Filter out embedding models (they're not suitable for generation benchmarks)
       models = models.reject { |m| m.include?("embed") || m.include?("embedding") }
       return models unless models.empty?

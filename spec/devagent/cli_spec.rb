@@ -43,23 +43,21 @@ RSpec.describe Devagent::CLI do
   end
 
   it "prints diagnostic info" do
-    allow(context).to receive(:resolved_provider).and_return("openai")
     allow(context).to receive(:model_for).with(:default).and_return("gpt-4o-mini")
     allow(context).to receive(:model_for).with(:planner).and_return("gpt-4o")
     allow(context).to receive(:model_for).with(:developer).and_return("gpt-4o-mini")
     allow(context).to receive(:model_for).with(:reviewer).and_return("gpt-4o")
-    allow(context).to receive(:embedding_backend_info).and_return({ "provider" => "openai",
-                                                                    "model" => "text-embedding-3-small" })
-    allow(context).to receive(:index).and_return(instance_double(Devagent::EmbeddingIndex, metadata: { "dim" => 1536 }))
-    allow(context).to receive(:openai_available?).and_return(true)
-    allow(context).to receive(:openai_uri_base).and_return("https://api.openai.com/v1")
+    allow(context).to receive_messages(resolved_provider: "openai", embedding_backend_info: { "provider" => "openai",
+                                                                                              "model" => "text-embedding-3-small" }, index: instance_double(Devagent::EmbeddingIndex, metadata: { "dim" => 1536 }), openai_available?: true, openai_uri_base: "https://api.openai.com/v1")
 
     expect { described_class.start(["diag"]) }.not_to raise_error
   end
 
   it "prints resolved configuration" do
-    allow(Devagent::Config).to receive(:resolve_ollama_host).and_return(["http://example:11434", :cli])
-    allow(Devagent::Config).to receive(:resolve_ollama_timeout_seconds).and_return([60, :user_config])
+    allow(Devagent::Config).to receive_messages(resolve_ollama_host: ["http://example:11434", :cli],
+                                                resolve_ollama_timeout_seconds: [
+                                                  60, :user_config
+                                                ])
 
     expect { described_class.start(["config", "--ollama-host", "http://example:11434"]) }.not_to raise_error
 

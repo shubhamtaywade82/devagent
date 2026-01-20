@@ -36,4 +36,3 @@ RSpec.describe Devagent::Memory do
     expect(mem.all).to eq({})
   end
 end
-

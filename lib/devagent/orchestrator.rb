@@ -410,7 +410,7 @@ module Devagent
 
     def ensure_dependencies!(step, results)
       Array(step["depends_on"]).each do |dep|
-        next if dep.to_i == 0
+        next if dep.to_i.zero?
 
         res = results[dep]
         raise Error, "Dependency #{dep} not satisfied" unless res && res["success"]
@@ -535,7 +535,7 @@ module Devagent
         if result.is_a?(Hash) && result["exit_code"].to_i != 0
           stderr = result["stderr"].to_s
           stdout = result["stdout"].to_s
-          error_text = (stderr + " " + stdout).downcase
+          error_text = "#{stderr} #{stdout}".downcase
           original_stderr = stderr # Keep original case for better error messages
 
           # Check for common "unknown option" errors
@@ -603,7 +603,7 @@ module Devagent
                 "args" => install_tokens.drop(1)
               )
 
-              if install_result.is_a?(Hash) && install_result["exit_code"].to_i == 0
+              if install_result.is_a?(Hash) && install_result["exit_code"].to_i.zero?
                 unless quiet?
                   streamer.say("✓ Dependencies installed successfully", level: :success)
                   streamer.say("Retrying original command...", level: :info)
@@ -663,7 +663,7 @@ module Devagent
                   "args" => install_tokens.drop(1)
                 )
 
-                if install_result.is_a?(Hash) && install_result["exit_code"].to_i == 0
+                if install_result.is_a?(Hash) && install_result["exit_code"].to_i.zero?
                   unless quiet?
                     streamer.say("✓ Package installed successfully", level: :success)
                     streamer.say("Retrying original command...", level: :info)
@@ -736,7 +736,7 @@ module Devagent
           exit_code = result.is_a?(Hash) ? result["exit_code"].to_i : 0
           accepted = Array(args["accepted_exit_codes"]).map(&:to_i)
           allow_failure = args["allow_failure"] == true
-          exit_code == 0 || allow_failure || accepted.include?(exit_code)
+          exit_code.zero? || allow_failure || accepted.include?(exit_code)
         else
           true
         end
@@ -863,10 +863,10 @@ module Devagent
       end
 
       # Build directory structure for each allowed directory
-      structures = allowed_dirs.map do |dir|
+      structures = allowed_dirs.filter_map do |dir|
         structure = get_directory_structure(path: dir, max_depth: 2)
         structure.empty? ? nil : "#{dir}/\n#{structure}"
-      end.compact
+      end
 
       if structures.empty?
         streamer.say("No files found in allowed directories.", markdown: true)
@@ -994,11 +994,7 @@ module Devagent
         Recent conversation:
         #{history}
 
-        #{unless dir_structure.empty?
-            "Directory structure:\n#{dir_structure}\n\n"
-          end}#{unless readme_content.empty?
-                                                                                       "Documentation:\n#{readme_content}\n\n"
-                                                                                     end}Repository context:
+        #{"Directory structure:\n#{dir_structure}\n\n" unless dir_structure.empty?}#{"Documentation:\n#{readme_content}\n\n" unless readme_content.empty?}Repository context:
         #{retrieved.empty? ? "(none)" : retrieved}
 
         Question:
@@ -1193,7 +1189,7 @@ module Devagent
       # Exception: if plan includes commands, relax the restriction
       # This allows plans that run tools like rubocop even if they read some files first
       has_commands = plan.steps.any? { |s| %w[exec.run run_command run_tests].include?(s["action"].to_s) }
-      if state.cycle.to_i == 0 && !has_commands
+      if state.cycle.to_i.zero? && !has_commands
         reads = plan.steps.count { |s| %w[fs.read fs_read].include?(s["action"].to_s) }
         raise Error, "too many reads in first plan" if reads > 1
       end
@@ -1227,8 +1223,7 @@ module Devagent
         if is_devagent_gem && !File.exist?(File.join(context.repo_path.to_s, normalized_path))
           if normalized_path.start_with?("lib/") && !normalized_path.start_with?("lib/devagent/")
             raise Error,
-                  "In devagent gem, new files must use playground/ directory, not lib/. Use 'playground/#{normalized_path.sub(%r{\Alib/},
-                                                                                                                              "")}' instead of '#{normalized_path}'"
+                  "In devagent gem, new files must use playground/ directory, not lib/. Use 'playground/#{normalized_path.delete_prefix("lib/")}' instead of '#{normalized_path}'"
           end
         end
 
@@ -1323,11 +1318,9 @@ module Devagent
         # Use integer step_id as key to match depends_on values
         step_id = s["step_id"].to_i
         reads[step_id] = normalized_path
-      end
 
-      # Enforce: fs.read must only target existing files.
-      # For new files, the planner must use fs.create.
-      plan.steps.each do |s|
+        # Enforce: fs.read must only target existing files.
+        # For new files, the planner must use fs.create.
         next unless %w[fs.read fs_read].include?(s["action"].to_s)
 
         path = s["path"].to_s
@@ -1339,10 +1332,8 @@ module Devagent
 
         state.record_observation({ "type" => "FILE_MISSING", "path" => normalized_path })
         raise Error, "fs.read on non-existent file (use fs.create for new files): #{normalized_path}"
-      end
 
-      # Enforce: fs.write validation (file must exist, no conflict with fs.create, must depend on fs.read)
-      plan.steps.each do |s|
+        # Enforce: fs.write validation (file must exist, no conflict with fs.create, must depend on fs.read)
         next unless %w[fs.write fs_write].include?(s["action"].to_s)
 
         path = s["path"].to_s
@@ -1365,9 +1356,7 @@ module Devagent
         dep_paths = deps.filter_map { |id| reads[id] }
 
         # If this write step already depends on a read of the same path, we're good
-        if dep_paths.include?(normalized_path)
-          next
-        end
+        next if dep_paths.include?(normalized_path)
 
         # Try to auto-fix: find the read step for this path and add it to dependencies
         read_step_id = reads.find { |_id, path| path == normalized_path }&.first
@@ -1423,7 +1412,7 @@ module Devagent
       return normalized if normalized.empty?
 
       # Remove ./ prefix
-      normalized = normalized.sub(%r{\A\./}, "")
+      normalized = normalized.delete_prefix("./")
 
       # If path starts with /, try to normalize it (but be conservative)
       if normalized.start_with?("/")
@@ -1431,7 +1420,7 @@ module Devagent
         # These are dangerous system directories that should be rejected by safety layer
         dangerous_system_paths = %w[/etc /usr /var /tmp /opt /root /bin /sbin /sys /proc /dev /mnt /media /boot /srv]
         is_dangerous = dangerous_system_paths.any? do |sys|
-          normalized == sys || normalized == sys + "/" || normalized.start_with?(sys + "/")
+          normalized == sys || normalized == "#{sys}/" || normalized.start_with?("#{sys}/")
         end
 
         # Dangerous system paths should not be normalized - they're real system paths
@@ -1440,7 +1429,7 @@ module Devagent
 
         # For other paths starting with / (like /lib/hello.rb), check if they're in the repo
         # Try normalizing: remove leading / and check if it would be inside repo
-        test_path = normalized.sub(%r{\A/}, "")
+        test_path = normalized.delete_prefix("/")
         test_absolute = File.expand_path(File.join(context.repo_path.to_s, test_path))
         repo_root = File.expand_path(context.repo_path.to_s)
         # Only normalize if the test path would be inside the repo
@@ -1490,7 +1479,7 @@ module Devagent
     end
 
     def with_spinner(label, &)
-      if ui&.respond_to?(:spinner)
+      if ui.respond_to?(:spinner)
         ui.spinner(label).run(&)
       else
         yield

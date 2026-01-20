@@ -103,4 +103,3 @@ RSpec.describe Devagent::DiffGenerator do
     end
   end
 end
-

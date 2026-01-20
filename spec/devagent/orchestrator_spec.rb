@@ -92,18 +92,22 @@ RSpec.describe Devagent::Orchestrator do
         goal: "Do work",
         assumptions: [],
         steps: [
-          { "step_id" => 1, "action" => "fs.read", "path" => "lib/devagent/version.rb", "command" => nil, "content" => nil, "reason" => "read", "depends_on" => [0] },
-          { "step_id" => 2, "action" => "fs.write", "path" => "lib/devagent/version.rb", "command" => nil, "content" => nil, "reason" => "write", "depends_on" => [1] }
+          { "step_id" => 1, "action" => "fs.read", "path" => "lib/devagent/version.rb", "command" => nil,
+            "content" => nil, "reason" => "read", "depends_on" => [0] },
+          { "step_id" => 2, "action" => "fs.write", "path" => "lib/devagent/version.rb", "command" => nil,
+            "content" => nil, "reason" => "write", "depends_on" => [1] }
         ],
         success_criteria: ["tests pass"],
         rollback_strategy: "revert",
-        confidence: 80  # 0-100 scale for new planner
+        confidence: 80 # 0-100 scale for new planner
       )
     end
 
     before do
       allow(new_planner).to receive(:call).and_return(new_plan)
-      allow(Devagent::DecisionEngine).to receive(:new).and_return(instance_double(Devagent::DecisionEngine, decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 }))
+      allow(Devagent::DecisionEngine).to receive(:new).and_return(instance_double(Devagent::DecisionEngine,
+                                                                                  decide: { "decision" => "SUCCESS",
+                                                                                            "reason" => "ok", "confidence" => 0.9 }))
       # Mock File.exist? to allow plan validation to pass
       allow(File).to receive(:exist?).and_call_original
       allow(File).to receive(:exist?).with("/workspace/lib/devagent/version.rb").and_return(true)
@@ -117,8 +121,10 @@ RSpec.describe Devagent::Orchestrator do
       expect(session_memory).to have_received(:append).with("user", "build feature")
       expect(index).to have_received(:build!)
       expect(tool_bus).to have_received(:reset!).at_least(:once)
-      expect(tool_bus).to have_received(:invoke).with("type" => "fs.read", "args" => { "path" => "lib/devagent/version.rb" })
-      expect(tool_bus).to have_received(:invoke).with("type" => "fs.write_diff", "args" => hash_including("path" => "lib/devagent/version.rb"))
+      expect(tool_bus).to have_received(:invoke).with("type" => "fs.read",
+                                                      "args" => { "path" => "lib/devagent/version.rb" })
+      expect(tool_bus).to have_received(:invoke).with("type" => "fs.write_diff",
+                                                      "args" => hash_including("path" => "lib/devagent/version.rb"))
       expect(tool_bus).to have_received(:run_tests)
       expect(new_planner).to have_received(:call).at_least(:once)
     end
@@ -146,7 +152,8 @@ RSpec.describe Devagent::Orchestrator do
 
       allow(new_planner).to receive(:call).and_return(create_new_plan)
       allow(Devagent::DecisionEngine).to receive(:new).and_return(
-        instance_double(Devagent::DecisionEngine, decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 })
+        instance_double(Devagent::DecisionEngine,
+                        decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 })
       )
 
       orchestrator = described_class.new(context, output: output)
@@ -180,16 +187,18 @@ RSpec.describe Devagent::Orchestrator do
       )
 
       allow(new_planner).to receive(:call).and_return(failing_new_plan)
-      allow(tool_bus).to receive(:invoke).and_return({ "stdout" => "", "stderr" => "offenses", "exit_code" => 1 })
-      allow(tool_bus).to receive(:changes_made?).and_return(false)
+      allow(tool_bus).to receive_messages(invoke: { "stdout" => "", "stderr" => "offenses", "exit_code" => 1 },
+                                          changes_made?: false)
       allow(Devagent::DecisionEngine).to receive(:new).and_return(
-        instance_double(Devagent::DecisionEngine, decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 })
+        instance_double(Devagent::DecisionEngine,
+                        decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 })
       )
 
       orchestrator = described_class.new(context, output: output)
       orchestrator.run("run cmd")
 
-      expect(tool_bus).to have_received(:invoke).with("type" => "exec.run", "args" => hash_including("program" => "bundle"))
+      expect(tool_bus).to have_received(:invoke).with("type" => "exec.run",
+                                                      "args" => hash_including("program" => "bundle"))
       expect(streamer).to have_received(:say).with(a_string_matching(/Step 1 failed/), hash_including(level: :error))
     end
 
@@ -216,21 +225,24 @@ RSpec.describe Devagent::Orchestrator do
       )
 
       allow(new_planner).to receive(:call).and_return(allowed_new_plan)
-      allow(tool_bus).to receive(:invoke).and_return({ "stdout" => "", "stderr" => "offenses", "exit_code" => 1 })
-      allow(tool_bus).to receive(:changes_made?).and_return(false)
+      allow(tool_bus).to receive_messages(invoke: { "stdout" => "", "stderr" => "offenses", "exit_code" => 1 },
+                                          changes_made?: false)
       allow(Devagent::DecisionEngine).to receive(:new).and_return(
-        instance_double(Devagent::DecisionEngine, decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 })
+        instance_double(Devagent::DecisionEngine,
+                        decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 })
       )
 
       orchestrator = described_class.new(context, output: output)
       orchestrator.run("run cmd ok")
 
-      expect(tool_bus).to have_received(:invoke).with("type" => "exec.run", "args" => hash_including("accepted_exit_codes" => [1]))
+      expect(tool_bus).to have_received(:invoke).with("type" => "exec.run",
+                                                      "args" => hash_including("accepted_exit_codes" => [1]))
       expect(streamer).not_to have_received(:say).with(a_string_matching(/Step 1 failed/), anything)
     end
 
     it "stops early when plan has no actions" do
-      empty_new_plan = Devagent::Planning::Plan.new(plan_id: "p", goal: "noop", assumptions: ["impossible"], steps: [], success_criteria: [], rollback_strategy: "", confidence: 90)
+      empty_new_plan = Devagent::Planning::Plan.new(plan_id: "p", goal: "noop", assumptions: ["impossible"], steps: [],
+                                                    success_criteria: [], rollback_strategy: "", confidence: 90)
       allow(new_planner).to receive(:call).and_return(empty_new_plan)
       orchestrator = described_class.new(context, output: output)
 
@@ -241,10 +253,11 @@ RSpec.describe Devagent::Orchestrator do
     end
 
     it "replans when tests fail" do
-      allow(tool_bus).to receive(:run_tests).and_return(:failed)
-      allow(tool_bus).to receive(:changes_made?).and_return(true)
+      allow(tool_bus).to receive_messages(run_tests: :failed, changes_made?: true)
       allow(new_planner).to receive(:call).and_return(new_plan, new_plan)
-      allow(Devagent::DecisionEngine).to receive(:new).and_return(instance_double(Devagent::DecisionEngine, decide: { "decision" => "RETRY", "reason" => "tests failing", "confidence" => 0.8 }))
+      allow(Devagent::DecisionEngine).to receive(:new).and_return(instance_double(Devagent::DecisionEngine,
+                                                                                  decide: { "decision" => "RETRY",
+                                                                                            "reason" => "tests failing", "confidence" => 0.8 }))
       orchestrator = described_class.new(context, output: output)
 
       orchestrator.run("iterate")
@@ -259,14 +272,17 @@ RSpec.describe Devagent::Orchestrator do
         goal: "Do work",
         assumptions: [],
         steps: [
-          { "step_id" => 1, "action" => "fs.read", "path" => "file", "command" => nil, "content" => nil, "reason" => "read", "depends_on" => [0] }
+          { "step_id" => 1, "action" => "fs.read", "path" => "file", "command" => nil, "content" => nil,
+            "reason" => "read", "depends_on" => [0] }
         ],
         success_criteria: [],
         rollback_strategy: "revert",
         confidence: 80
       )
       allow(new_planner).to receive(:call).and_return(read_only_new_plan)
-      allow(Devagent::DecisionEngine).to receive(:new).and_return(instance_double(Devagent::DecisionEngine, decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 }))
+      allow(Devagent::DecisionEngine).to receive(:new).and_return(instance_double(Devagent::DecisionEngine,
+                                                                                  decide: { "decision" => "SUCCESS",
+                                                                                            "reason" => "ok", "confidence" => 0.9 }))
       orchestrator = described_class.new(context, output: output)
 
       orchestrator.run("noop")
@@ -296,7 +312,8 @@ RSpec.describe Devagent::Orchestrator do
 
       orchestrator.run("list all files in this repository")
 
-      expect(streamer).to have_received(:say).with(a_string_matching(/Clarification needed/i), hash_including(level: :warn))
+      expect(streamer).to have_received(:say).with(a_string_matching(/Clarification needed/i),
+                                                   hash_including(level: :warn))
       expect(streamer).to have_received(:say).with(a_string_matching(/Files from allowed directories/), anything)
       expect(index).not_to have_received(:build!)
     end

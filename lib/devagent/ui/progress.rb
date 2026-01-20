@@ -52,7 +52,7 @@ module Devagent
         end
 
         def next_bar!
-          bars[current_bar].finish if bars[current_bar]
+          bars[current_bar]&.finish
           @current_bar += 1
           bars[current_bar]&.start
         end

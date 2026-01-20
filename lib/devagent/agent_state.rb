@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "set"
-
 module Devagent
   # AgentState is the controller-owned "brain" for a single run.
   #

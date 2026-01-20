@@ -26,4 +26,3 @@ RSpec.describe Devagent::Tracer do
     end
   end
 end
-

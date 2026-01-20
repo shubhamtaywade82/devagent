@@ -81,14 +81,16 @@ RSpec.describe Devagent::Orchestrator, "goal-driven retry loop" do
         plan_id: "test",
         goal: "Test",
         assumptions: [],
-        steps: [{ "step_id" => 1, "action" => "exec.run", "command" => "echo hi", "reason" => "test", "depends_on" => [] }],
+        steps: [{ "step_id" => 1, "action" => "exec.run", "command" => "echo hi", "reason" => "test",
+                  "depends_on" => [] }],
         success_criteria: [],
         rollback_strategy: "",
         confidence: 80
       )
       allow(new_planner).to receive(:call).and_return(plan)
       allow(Devagent::DecisionEngine).to receive(:new).and_return(
-        instance_double(Devagent::DecisionEngine, decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 })
+        instance_double(Devagent::DecisionEngine,
+                        decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 })
       )
 
       orchestrator = described_class.new(context, output: output)
@@ -124,14 +126,16 @@ RSpec.describe Devagent::Orchestrator, "goal-driven retry loop" do
         plan_id: "test",
         goal: "Test",
         assumptions: [],
-        steps: [{ "step_id" => 1, "action" => "exec.run", "command" => "echo hi", "reason" => "test", "depends_on" => [] }],
+        steps: [{ "step_id" => 1, "action" => "exec.run", "command" => "echo hi", "reason" => "test",
+                  "depends_on" => [] }],
         success_criteria: [],
         rollback_strategy: "",
         confidence: 80
       )
       allow(new_planner).to receive(:call).and_return(plan)
       allow(Devagent::DecisionEngine).to receive(:new).and_return(
-        instance_double(Devagent::DecisionEngine, decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 })
+        instance_double(Devagent::DecisionEngine,
+                        decide: { "decision" => "SUCCESS", "reason" => "ok", "confidence" => 0.9 })
       )
 
       orchestrator = described_class.new(context, output: output)
@@ -147,7 +151,8 @@ RSpec.describe Devagent::Orchestrator, "goal-driven retry loop" do
         plan_id: "test",
         goal: "Test",
         assumptions: [],
-        steps: [{ "step_id" => 1, "action" => "exec.run", "command" => "echo hi", "reason" => "test", "depends_on" => [] }],
+        steps: [{ "step_id" => 1, "action" => "exec.run", "command" => "echo hi", "reason" => "test",
+                  "depends_on" => [] }],
         success_criteria: [],
         rollback_strategy: "",
         confidence: 80

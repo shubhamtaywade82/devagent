@@ -22,10 +22,9 @@ RSpec.describe Devagent::LLM do
   end
 
   before do
-    allow(context).to receive(:openai_api_key).and_return(nil)
-    allow(context).to receive(:llm_cache).and_return({})
+    allow(context).to receive_messages(openai_api_key: nil, llm_cache: {})
     allow(context).to receive(:model_for) { |role| role == :embedding ? "text-embedding-3-small" : "qwen" }
-    allow(context).to receive(:llm_params) { |_provider| {} }
+    allow(context).to receive(:llm_params).and_return({})
   end
 
   it "caches adapters per role" do
@@ -46,8 +45,8 @@ RSpec.describe Devagent::LLM do
   it "raises when OpenAI is requested without credentials" do
     allow(context).to receive(:provider_for).with(:planner).and_return("openai")
 
-    expect {
+    expect do
       described_class.for_role(context, :planner)
-    }.to raise_error(Devagent::Error, /Set OPENAI_API_KEY or configure openai\.uri_base for Ollama/)
+    end.to raise_error(Devagent::Error, /Set OPENAI_API_KEY or configure openai\.uri_base for Ollama/)
   end
 end

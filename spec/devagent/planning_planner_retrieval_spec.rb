@@ -5,6 +5,8 @@ require "fileutils"
 
 RSpec.describe Devagent::Planning::Planner do
   let(:repo_path) { Dir.mktmpdir }
+  let(:context) { StubPlannerContext.new(repo_path: repo_path) }
+  let(:retrieval_controller) { FakeRetrievalController.new }
 
   class FakePlannerEmbeddingAdapter
     def embed(texts, model: nil)
@@ -17,7 +19,7 @@ RSpec.describe Devagent::Planning::Planner do
       @response = response
     end
 
-    def query(prompt, params: {}, response_format: nil)
+    def query(_prompt, params: {}, response_format: nil)
       @response
     end
   end
@@ -111,13 +113,10 @@ RSpec.describe Devagent::Planning::Planner do
       @repo_empty_value
     end
 
-    def retrieve_for_goal(goal, intent:, limit: 8)
+    def retrieve_for_goal(_goal, intent:, limit: 8)
       @retrieval_result
     end
   end
-
-  let(:context) { StubPlannerContext.new(repo_path: repo_path) }
-  let(:retrieval_controller) { FakeRetrievalController.new }
 
   before do
     File.write(File.join(repo_path, "sample.rb"), "class Sample\nend\n")

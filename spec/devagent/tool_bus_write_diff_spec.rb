@@ -4,6 +4,8 @@ require "tmpdir"
 require "fileutils"
 
 RSpec.describe Devagent::ToolBus do
+  subject(:tool_bus) { described_class.new(context, registry: registry) }
+
   let(:repo) { Dir.mktmpdir }
   let(:config) do
     {
@@ -27,8 +29,6 @@ RSpec.describe Devagent::ToolBus do
   end
   let(:registry) { Devagent::ToolRegistry.default }
 
-  subject(:tool_bus) { described_class.new(context, registry: registry) }
-
   after do
     FileUtils.remove_entry(repo)
   end
@@ -49,4 +49,3 @@ RSpec.describe Devagent::ToolBus do
     expect(File.read(File.join(repo, "lib/new_file.rb"))).to include("puts")
   end
 end
-

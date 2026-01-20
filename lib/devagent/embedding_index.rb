@@ -201,7 +201,7 @@ module Devagent
     end
 
     def valid_vector?(vector)
-      vector.is_a?(Array) && vector.all? { |v| v.is_a?(Numeric) }
+      vector.is_a?(Array) && vector.all?(Numeric)
     end
 
     def enumerate_chunks

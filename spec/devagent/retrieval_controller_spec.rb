@@ -5,6 +5,8 @@ require "fileutils"
 
 RSpec.describe Devagent::RetrievalController do
   let(:repo_path) { Dir.mktmpdir }
+  let(:context) { StubContext.new(repo_path: repo_path) }
+  let(:controller) { described_class.new(context) }
   let(:logger_messages) { [] }
 
   # Minimal context double for testing
@@ -69,9 +71,6 @@ RSpec.describe Devagent::RetrievalController do
       @events << { name: name, data: data }
     end
   end
-
-  let(:context) { StubContext.new(repo_path: repo_path) }
-  let(:controller) { described_class.new(context) }
 
   before do
     # Create a sample file for indexing

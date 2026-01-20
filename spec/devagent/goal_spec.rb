@@ -53,7 +53,7 @@ RSpec.describe Devagent::Goal do
     it "returns false when compared with non-Goal objects" do
       goal = described_class.new("Test goal")
       expect(goal).not_to eq("Test goal")
-      expect(goal).not_to eq(nil)
+      expect(goal).not_to be_nil
     end
   end
 
