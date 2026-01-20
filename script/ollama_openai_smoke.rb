@@ -8,6 +8,10 @@ repo_root = File.expand_path("..", __dir__)
 context = Devagent::Context.build(repo_root)
 adapter = context.llm_for(:planner)
 
+puts "Provider: #{context.provider_for(:planner)}"
+puts "Model: #{context.model_for(:planner)}"
+puts ""
+
 puts "== Non-streaming =="
 puts adapter.query("Write a Ruby method that safely parses a CSV string.")
 
