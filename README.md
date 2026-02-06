@@ -71,14 +71,14 @@ Note: Devagent does **not** auto-load `.env` / dotenv files from the current dir
 
 ### Configuration files (global vs project)
 
-Devagent uses two different configuration files with different scopes:
+Devagent uses two different configuration files with different scopes. Global config provides defaults, and project config overrides those defaults:
 
 - **Global user config** (`~/.devagent.yml`)
-  - Provider defaults
+  - Default provider/models and preferences for all projects
   - **Ollama host** (`ollama.host`) and timeouts (`ollama.timeout`)
-  - Personal preferences that should apply regardless of which directory you run `devagent` from
 
 - **Project config** (`.devagent.yml` in the repo root)
+  - Overrides global defaults per project
   - File allowlist/denylist (sandbox)
   - Project-specific model choices
   - Test commands / indexing rules

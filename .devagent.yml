@@ -15,10 +15,10 @@ provider: ollama
 # For best results, use code-specific models for developer_model and planner_model
 # Updated to use models that actually exist in your Ollama server
 model: "qwen2.5-coder:7b" # 7B model - better schema compliance than 1.5b
-planner_model: "qwen2.5-coder:7b" # 7B model for better JSON/structured planning (follows schema better)
+planner_model: "llama3.1:8b-instruct-q4_K_M" # Stronger JSON/structured planning
 developer_model: "qwen2.5-coder:7b" # 7B model for code generation
-reviewer_model: "mistral:7b-instruct" # Already available, good for code review
-embed_model: "nomic-embed-text:latest" # Embedding model (use :latest tag for latest version)
+reviewer_model: "llama3.1:8b-instruct-q4_K_M" # Strong reviewer model
+embed_model: "nomic-embed-text:v1.5" # Embedding model (pinned tag)
 
 # OpenAI models (use with --provider openai)
 # Uncomment to use OpenAI models by default:

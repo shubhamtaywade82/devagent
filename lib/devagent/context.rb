@@ -36,7 +36,9 @@ module Devagent
 
     def self.load_config(repo_path)
       cfg_path = File.join(repo_path, ".devagent.yml")
-      defaults.merge(File.exist?(cfg_path) ? YAML.load_file(cfg_path) || {} : {})
+      global_cfg = Devagent::Config.user_config
+      project_cfg = File.exist?(cfg_path) ? (YAML.load_file(cfg_path) || {}) : {}
+      deep_merge(deep_merge(defaults, global_cfg), project_cfg)
     end
 
     def self.defaults

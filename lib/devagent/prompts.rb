@@ -62,6 +62,8 @@ module Devagent
 
       Rules:
       - Return VALID JSON only. Your response MUST be parseable JSON - no extra text before/after, no markdown code blocks.
+      - Do NOT include code snippets, CSS selectors, JSON blobs, or multi-line content in any field. Use short natural-language descriptions only.
+      - Avoid characters that commonly break JSON when unescaped (e.g., raw newlines, tabs). Keep strings single-line.
       - steps[].action must be one of the available tools.
       - Every fs.write MUST depend_on a prior fs.read of the same path.
       - Prefer minimal steps.
