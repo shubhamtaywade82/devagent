@@ -43,7 +43,8 @@ module Devagent
           context.tracer.event("repl_error", message: e.message)
         end
       rescue Interrupt
-        log(:warn, "^C")
+        log(:warn, "^C (exit)")
+        break
       end
 
       log(:success, "Goodbye!")

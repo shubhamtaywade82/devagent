@@ -327,6 +327,7 @@ module Devagent
           Rules:
           - Do NOT write code
           - Do NOT suggest implementations
+          - Do NOT include code snippets, CSS selectors, or multi-line content in any JSON field
           - Return VALID JSON only - no markdown code blocks, no extra text
           - Each step must have: step_id (integer >= 1), action (string), reason (string), depends_on (array of integers)
           - Actions: fs.read, fs.write, fs.create, fs.delete, exec.run
@@ -334,8 +335,8 @@ module Devagent
           Filesystem semantics (CRITICAL):
           - fs.read: ONLY for files that ALREADY EXIST. Never use fs.read on files that don't exist.
           - fs.create: ONLY for creating NEW files that don't exist yet.
-            * MUST include 'content' field with the COMPLETE file content (the entire file, not partial).
-            * The content field must contain the full, final version of the file with all features implemented.
+            * IMPORTANT: Do NOT include full file content in the plan. The executor will generate content.
+            * Use a short, single-line "reason" describing what the file should contain.
             #{if is_devagent_gem
                 <<~CRITICAL
                   * ⚠️ CRITICAL WORKSPACE RULE: You are in the devagent gem. For ALL new files, you MUST use playground/ directory.
@@ -347,9 +348,9 @@ module Devagent
               else
                 "* Use appropriate project directory (lib/, src/, app/, etc.) for new files"
               end}
-            * NEVER use fs.write after fs.create for the same file - fs.create already includes all the content.
+            * NEVER use fs.write after fs.create for the same file.
             * NEVER use both fs.create and fs.write for the same file path - this will be rejected.
-            * Example: {"step_id": 1, "action": "fs.create", "path": "#{is_devagent_gem ? "playground" : "lib"}/calculator.rb", "content": "# frozen_string_literal: true\n\nclass Calculator\n  # complete class implementation here\nend", "reason": "Create calculator class", "depends_on": []}
+            * Example: {"step_id": 1, "action": "fs.create", "path": "#{is_devagent_gem ? "playground" : "lib"}/calculator.rb", "reason": "Create calculator class with basic arithmetic methods", "depends_on": []}
           - fs.write: ONLY for editing EXISTING files.
             * CRITICAL: Every fs.write step MUST have a "depends_on" array that includes the step_id of the fs.read step that reads the SAME file path.
             * Example: If step 1 is "fs.read" for "playground/file.rb", then step 3 "fs.write" for "playground/file.rb" MUST have "depends_on": [1]
@@ -372,6 +373,7 @@ module Devagent
             * Ruby files (.rb): Use "bundle exec rubocop" to check, "bundle exec rubocop -a" to auto-fix (rubocop is commonly available in Ruby projects). Set 'allow_failure: true' for linting steps.
             * Python files (.py): Linting is OPTIONAL. Only include flake8/black steps if you're certain they're installed. Many Python projects don't have these tools. If you include them, use "python3 -m flake8" (ALWAYS use python3, not python) with 'allow_failure: true'. Flake8 does NOT have auto-fix. If issues are found, read the output and use fs.write to fix them manually, or use "python3 -m black" to auto-format.
             * JavaScript/TypeScript files (.js, .jsx, .ts, .tsx): Use "npx eslint" to check, "npx eslint --fix" to auto-fix. Prefer npx over npm run as it doesn't require package.json scripts. Example: "npx eslint --fix playground/file.js". Set 'allow_failure: true' for linting steps.
+            * HTML/CSS files (.html, .css): Do NOT run eslint. Only use linters if explicitly requested and available.
           - IMPORTANT: Only use linters that are appropriate for the file type. Don't run rubocop on Python files or flake8 on Ruby files.
           - IMPORTANT: For Python commands, ALWAYS use "python3" (not "python") as many systems don't have "python" command. Example: "python3 -m flake8" not "python -m flake8".
           - RULE: If a previous attempt failed because linting tools weren't available (e.g., "No module named flake8", "No such file or directory"), DO NOT include linting steps in the retry plan. Focus on creating/modifying the file correctly without linting.

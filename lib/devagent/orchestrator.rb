@@ -436,7 +436,14 @@ module Devagent
         raise Error, "file already exists: #{normalized_path}" if File.exist?(File.join(context.repo_path,
                                                                                         normalized_path))
 
-        raise Error, "content required" if content.to_s.empty?
+        if content.to_s.empty?
+          # Generate content when planner omits it (avoid embedding large content in JSON plans)
+          content = generate_file_content(
+            normalized_path,
+            step["reason"].to_s,
+            plan.goal.to_s
+          )
+        end
 
         # Deterministic add-file diff generation (do not rely on model formatting).
         # Use normalized path in diff to avoid git apply errors with ./ paths
@@ -520,6 +527,12 @@ module Devagent
         cmd = "bundle exec rspec" if action == "run_tests" && cmd.strip.empty?
         tokens = Shellwords.split(cmd)
         raise Error, "command required" if tokens.empty?
+
+        # Default linting commands to allow_failure to avoid blocking progress
+        if cmd.match?(/\b(rubocop|flake8|pylint|black|eslint|prettier|lint)\b/i)
+          step["allow_failure"] = true if step["allow_failure"].nil?
+          step["accepted_exit_codes"] ||= [0, 1]
+        end
 
         result = tool_invoke_with_policy(
           state,

@@ -15,6 +15,7 @@ module Devagent
         @output = output
         @input = input
         @history = history
+        @last_interrupt_at = nil
         setup_readline if READLINE_AVAILABLE
       end
 
@@ -38,8 +39,14 @@ module Devagent
           @input.gets&.chomp
         end
       rescue Interrupt
+        now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        if @last_interrupt_at && (now - @last_interrupt_at) <= 2.0
+          # Let the caller handle exit on second interrupt
+          raise
+        end
+        @last_interrupt_at = now
         output.puts
-        output.puts("Interrupted. Type 'exit' to quit or continue typing.")
+        output.puts("Interrupted. Press Ctrl+C again to exit.")
         retry
       end
 
